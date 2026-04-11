@@ -996,84 +996,687 @@ def member_panel():
         if not member:
             st.error("সদস্য পাওয়া যায়নি")
             st.session_state.logged_in = False
-            st.rerun()
-            return
+import streamlit as st
+import sqlite3
+import requests
+import random
+import string
+import pandas as pd
+from datetime import datetime, timedelta
+from io import BytesIO
+
+# ============================================
+# কনফিগারেশন
+# ============================================
+TELEGRAM_BOT_TOKEN = "8752100386:AAEa-vMD4yPCKE0LPTFx-198Llbf8qZFgE8"
+ADMIN_CHAT_ID = "8548828754"
+ADMIN_MOBILE = "01766222373"
+ADMIN_PASSWORD = "oio112024"
+SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
+
+# ============================================
+# পেজ কনফিগ
+# ============================================
+st.set_page_config(
+    page_title=SOMITI_NAME,
+    page_icon="🌾",
+    layout="wide"
+)
+
+# ============================================
+# ডাটাবেজ সেটআপ
+# ============================================
+def init_database():
+    conn = sqlite3.connect('somiti.db')
+    c = conn.cursor()
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS members (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            phone TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            telegram_id TEXT,
+            total_savings REAL DEFAULT 0,
+            monthly_savings REAL DEFAULT 500,
+            join_date TEXT,
+            status TEXT DEFAULT 'active'
+        )
+    ''')
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id TEXT NOT NULL,
+            amount REAL NOT NULL,
+            transaction_type TEXT NOT NULL,
+            month TEXT,
+            date TEXT NOT NULL,
+            note TEXT,
+            late_fee REAL DEFAULT 0
+        )
+    ''')
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# ============================================
+# টেলিগ্রাম মেসেজ ফাংশন
+# ============================================
+def send_telegram_message(chat_id, message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message}
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except:
+        return False
+
+def send_telegram_channel_message(message):
+    return send_telegram_message(ADMIN_CHAT_ID, message)
+
+# ============================================
+# হেল্পার ফাংশন
+# ============================================
+def generate_member_id():
+    conn = sqlite3.connect('somiti.db')
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM members")
+    count = c.fetchone()[0] + 1
+    conn.close()
+    return f"M-{count:03d}"
+
+def generate_password(length=6):
+    return ''.join(random.choices(string.digits, k=length))
+
+def get_total_savings():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("SELECT SUM(total_savings) FROM members WHERE status = 'active'")
+        total = c.fetchone()[0] or 0
+        conn.close()
+        return total
+    except:
+        return 0
+
+def get_total_expenses():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("SELECT SUM(amount) FROM expenses")
+        total = c.fetchone()[0] or 0
+        conn.close()
+        return total
+    except:
+        return 0
+
+def get_cash_balance():
+    return get_total_savings() - get_total_expenses()
+
+def get_current_month_collection():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        current_month = datetime.now().strftime("%Y-%m")
+        c.execute("SELECT SUM(amount) FROM transactions WHERE month = ?", (current_month,))
+        total = c.fetchone()[0] or 0
+        conn.close()
+        return total
+    except:
+        return 0
+
+def get_current_month_target():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("SELECT SUM(monthly_savings) FROM members WHERE status = 'active'")
+        total = c.fetchone()[0] or 0
+        conn.close()
+        return total
+    except:
+        return 0
+
+def get_current_month_defaulters_count():
+    try:
+        current_month = datetime.now().strftime("%Y-%m")
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT member_id FROM transactions WHERE month = ?", (current_month,))
+        paid = [row[0] for row in c.fetchall()]
         
-        name, phone, savings, monthly, member_id = member
-        monthly = monthly or 500
+        if paid:
+            placeholders = ','.join(['?' for _ in paid])
+            c.execute(f"""
+                SELECT COUNT(*) FROM members 
+                WHERE status = 'active' AND id NOT IN ({placeholders})
+            """, paid)
+        else:
+            c.execute("SELECT COUNT(*) FROM members WHERE status = 'active'")
         
-        with st.sidebar:
-            st.markdown(f"### 👤 {name}")
-            st.caption(f"🆔 {member_id}")
-            st.caption(f"📱 {phone}")
-            st.metric("💰 মোট জমা", f"{savings:,.0f} টাকা")
-            st.metric("📅 মাসিক কিস্তি", f"{monthly:,.0f} টাকা")
-            
-            menu = st.radio("মেনু", ["📊 ড্যাশবোর্ড", "🔑 পাসওয়ার্ড পরিবর্তন", "🚪 লগআউট"], label_visibility="collapsed")
+        count = c.fetchone()[0]
+        conn.close()
+        return count
+    except:
+        return 0
+
+def search_members(search_term):
+    conn = sqlite3.connect('somiti.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, phone 
+        FROM members 
+        WHERE status = 'active' AND (id LIKE ? OR name LIKE ? OR phone LIKE ?)
+        ORDER BY name
+        LIMIT 20
+    """, (f"%{search_term}%", f"%{search_term}%", f"%{search_term}%"))
+    results = c.fetchall()
+    conn.close()
+    return results
+
+def get_member_by_id_or_name(search_term):
+    conn = sqlite3.connect('somiti.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, phone, total_savings, monthly_savings, status, telegram_id
+        FROM members 
+        WHERE id = ? OR name LIKE ?
+    """, (search_term, f"%{search_term}%"))
+    result = c.fetchone()
+    conn.close()
+    return result
+
+def pick_lottery_winner():
+    conn = sqlite3.connect('somiti.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, phone, total_savings, telegram_id 
+        FROM members 
+        WHERE status = 'active'
+        ORDER BY RANDOM() 
+        LIMIT 1
+    """)
+    winner = c.fetchone()
+    conn.close()
+    return winner
+
+# ============================================
+# UI স্টাইল (আগের সুন্দর ডিজাইন)
+# ============================================
+def apply_custom_css():
+    st.markdown("""
+    <style>
+    /* মেইন ব্যাকগ্রাউন্ড */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+    
+    /* হেডার */
+    .somiti-header {
+        background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+        padding: 25px;
+        border-radius: 15px;
+        margin-bottom: 25px;
+        text-align: center;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    .somiti-header h1 {
+        color: white;
+        font-size: 38px;
+        font-weight: 800;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        letter-spacing: 2px;
+    }
+    .somiti-header p {
+        color: #d4e6f1;
+        font-size: 16px;
+        margin: 8px 0 0 0;
+        font-weight: 400;
+    }
+    
+    /* টোটাল টাকার বক্স */
+    .total-box {
+        background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 25px;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+    .total-box h2 {
+        color: white;
+        font-size: 32px;
+        font-weight: 800;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    .total-box p {
+        color: #d5f5e3;
+        font-size: 14px;
+        margin: 5px 0 0 0;
+        font-weight: 500;
+    }
+    
+    /* ক্যাশ বক্স */
+    .cash-box {
+        background: linear-gradient(135deg, #e67e22 0%, #f39c12 100%);
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 25px;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+    .cash-box h2 {
+        color: white;
+        font-size: 32px;
+        font-weight: 800;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    .cash-box p {
+        color: #fdebd0;
+        font-size: 14px;
+        margin: 5px 0 0 0;
+        font-weight: 500;
+    }
+    
+    /* KPI কার্ড */
+    .kpi-card {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        text-align: center;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        margin-bottom: 10px;
+        border: 1px solid #e8e8e8;
+    }
+    .kpi-card h3 {
+        color: #2c3e50;
+        font-size: 28px;
+        font-weight: 700;
+        margin: 5px 0;
+    }
+    .kpi-card p {
+        color: #7f8c8d;
+        font-size: 14px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    
+    /* লটারি বক্স */
+    .lottery-box {
+        background: linear-gradient(135deg, #8e44ad 0%, #9b59b6 100%);
+        padding: 30px;
+        border-radius: 20px;
+        text-align: center;
+        margin: 20px 0;
+        box-shadow: 0 15px 30px rgba(0,0,0,0.3);
+        border: 2px solid gold;
+    }
+    .lottery-box h3 {
+        color: gold;
+        font-size: 36px;
+        font-weight: 800;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    .lottery-box p {
+        color: white;
+        font-size: 18px;
+        margin: 10px 0;
+    }
+    
+    /* লগইন কার্ড */
+    .login-card {
+        max-width: 420px;
+        margin: 50px auto;
+        padding: 40px;
+        border-radius: 20px;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+        background: white;
+        border: 1px solid #e0e0e0;
+    }
+    .login-card h3 {
+        color: #1a5276;
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 25px;
+        text-align: center;
+    }
+    
+    /* বাটন */
+    .stButton > button {
+        background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+        color: white;
+        font-weight: 600;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 24px;
+        width: 100%;
+        font-size: 16px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #2980b9 0%, #3498db 100%);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        transform: translateY(-2px);
+    }
+    
+    /* প্রাইমারি বাটন */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #2ecc71 0%, #58d68d 100%);
+    }
+    
+    /* সাইডবার */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        border-right: 1px solid #0f3460;
+    }
+    section[data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    section[data-testid="stSidebar"] .stRadio > div {
+        background: rgba(255,255,255,0.1);
+        border-radius: 10px;
+        padding: 10px;
+    }
+    
+    /* মেট্রিক কার্ড */
+    div[data-testid="metric-container"] {
+        background: white;
+        border-radius: 12px;
+        padding: 15px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        border: 1px solid #e8e8e8;
+    }
+    
+    /* টেবিল */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+    }
+    
+    /* ইনপুট ফিল্ড */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div,
+    .stNumberInput > div > div > input {
+        border-radius: 10px;
+        border: 1px solid #d0d7de;
+        padding: 10px;
+    }
+    
+    /* ট্যাব */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 10px 10px 0 0;
+        padding: 12px 24px;
+        background: #f0f2f6;
+        font-weight: 500;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+        color: white;
+    }
+    
+    /* সাকসেস মেসেজ */
+    .stSuccess {
+        background: #d4edda;
+        border-left: 5px solid #27ae60;
+        color: #155724;
+        border-radius: 8px;
+    }
+    
+    /* এরর মেসেজ */
+    .stError {
+        background: #f8d7da;
+        border-left: 5px solid #e74c3c;
+        color: #721c24;
+        border-radius: 8px;
+    }
+    
+    /* ওয়ার্নিং */
+    .stWarning {
+        background: #fff3cd;
+        border-left: 5px solid #f39c12;
+        color: #856404;
+        border-radius: 8px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+def show_header():
+    total = get_total_savings()
+    
+    st.markdown(f"""
+    <div class="somiti-header">
+        <h1>🌾 {SOMITI_NAME} 🌾</h1>
+        <p>সঞ্চয় ও ঋণ ব্যবস্থাপনা সিস্টেম</p>
+    </div>
+    
+    <div class="total-box">
+        <h2>💰 {total:,.0f} টাকা</h2>
+        <p>সমিতির মোট জমা</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_admin_header():
+    total = get_total_savings()
+    cash = get_cash_balance()
+    
+    st.markdown(f"""
+    <div class="somiti-header">
+        <h1>🌾 {SOMITI_NAME} 🌾</h1>
+        <p>সঞ্চয় ও ঋণ ব্যবস্থাপনা সিস্টেম</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"""
+        <div class="total-box">
+            <h2>💰 {total:,.0f} টাকা</h2>
+            <p>সমিতির মোট জমা</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="cash-box">
+            <h2>💵 {cash:,.0f} টাকা</h2>
+            <p>ক্যাশ ব্যালেন্স</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def show_kpi_card(title, value, icon=""):
+    st.markdown(f"""
+    <div class="kpi-card">
+        <p>{icon} {title}</p>
+        <h3>{value}</h3>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ============================================
+# সেশন স্টেট
+# ============================================
+def init_session():
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'user_type' not in st.session_state:
+        st.session_state.user_type = None
+    if 'member_id' not in st.session_state:
+        st.session_state.member_id = None
+
+# ============================================
+# লগইন পেজ
+# ============================================
+def login_page():
+    apply_custom_css()
+    show_header()
+    
+    with st.container():
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.markdown("### 🔐 লগইন")
         
-        if menu == "🚪 লগআউট":
-            for key in ['logged_in', 'user_type', 'member_id']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+        phone = st.text_input("📱 মোবাইল নম্বর", placeholder="017XXXXXXXX", key="login_phone")
+        password = st.text_input("🔑 পাসওয়ার্ড", type="password", key="login_pass")
         
-        elif menu == "📊 ড্যাশবোর্ড":
-            st.markdown(f"### স্বাগতম, {name}! 👋")
-            
-            col1, col2 = st.columns(2)
-            col1.metric("💰 বর্তমান জমা", f"{savings:,.0f} টাকা")
-            col2.metric("📅 মাসিক কিস্তি", f"{monthly:,.0f} টাকা")
-            
-            current_month = datetime.now().strftime("%Y-%m")
-            c.execute("""
-                SELECT SUM(amount) FROM transactions 
-                WHERE member_id = ? AND month = ?
-            """, (st.session_state.member_id, current_month))
-            paid = c.fetchone()[0] or 0
-            
-            if paid >= monthly:
-                st.success(f"✅ {current_month} মাসের কিস্তি পরিশোধ করেছেন")
+        if st.button("প্রবেশ করুন", key="login_btn"):
+            if phone == ADMIN_MOBILE and password == ADMIN_PASSWORD:
+                st.session_state.logged_in = True
+                st.session_state.user_type = 'admin'
+                st.success("✅ এডমিন লগইন সফল!")
+                st.rerun()
             else:
-                st.warning(f"⚠️ বকেয়া: {monthly - paid:,.0f} টাকা")
+                try:
+                    conn = sqlite3.connect('somiti.db')
+                    c = conn.cursor()
+                    c.execute("SELECT id, password, status FROM members WHERE phone = ?", (phone,))
+                    result = c.fetchone()
+                    conn.close()
+                    
+                    if result and result[2] != 'active':
+                        st.error("❌ অ্যাকাউন্ট নিষ্ক্রিয়")
+                    elif result and result[1] == password:
+                        st.session_state.logged_in = True
+                        st.session_state.user_type = 'member'
+                        st.session_state.member_id = result[0]
+                        st.success("✅ লগইন সফল!")
+                        st.rerun()
+                    else:
+                        st.error("❌ ভুল মোবাইল বা পাসওয়ার্ড")
+                except Exception as e:
+                    st.error(f"❌ ডাটাবেজ এরর: {e}")
+        
+        st.markdown("---")
+        st.caption(f"পাসওয়ার্ড ভুলে গেলে: {ADMIN_MOBILE}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ============================================
+# এডমিন ড্যাশবোর্ড
+# ============================================
+def admin_panel():
+    apply_custom_css()
+    show_admin_header()
+    
+    with st.sidebar:
+        st.markdown("### 📋 এডমিন মেনু")
+        st.caption(f"👑 {ADMIN_MOBILE}")
+        
+        menu = st.radio(
+            "নির্বাচন করুন",
+            ["🏠 ড্যাশবোর্ড", "➕ নতুন সদস্য", "✏️ সদস্য ব্যবস্থাপনা", "💵 টাকা জমা", 
+             "💸 খরচ ব্যবস্থাপনা", "📊 রিপোর্ট", "🎲 লটারি", "🚪 লগআউট"],
+            label_visibility="collapsed"
+        )
+    
+    if menu == "🚪 লগআউট":
+        for key in ['logged_in', 'user_type', 'member_id']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+    
+    elif menu == "🏠 ড্যাশবোর্ড":
+        st.markdown("### 🏠 এডমিন ড্যাশবোর্ড")
+        
+        # KPI কার্ডস
+        col1, col2, col3, col4 = st.columns(4)
+        
+        try:
+            conn = sqlite3.connect('somiti.db')
+            c = conn.cursor()
             
-            st.markdown("---")
-            st.markdown("#### 📋 লেনদেন ইতিহাস")
+            c.execute("SELECT COUNT(*) FROM members WHERE status = 'active'")
+            total_members = c.fetchone()[0]
+            with col1:
+                show_kpi_card("মোট সদস্য", f"{total_members} জন", "👥")
             
+            total_savings = get_total_savings()
+            with col2:
+                show_kpi_card("মোট জমা", f"{total_savings:,.0f} টাকা", "💰")
+            
+            month_collection = get_current_month_collection()
+            with col3:
+                show_kpi_card("এই মাসের জমা", f"{month_collection:,.0f} টাকা", "📅")
+            
+            defaulters = get_current_month_defaulters_count()
+            with col4:
+                show_kpi_card("বকেয়াদার", f"{defaulters} জন", "⚠️")
+            
+            conn.close()
+        except:
+            pass
+        
+        st.markdown("---")
+        
+        # প্রগ্রেস বার
+        st.subheader("📊 মাসিক কালেকশন প্রগ্রেস")
+        target = get_current_month_target()
+        collected = get_current_month_collection()
+        
+        if target > 0:
+            progress = min(collected / target, 1.0)
+            st.progress(progress)
+            st.write(f"🎯 লক্ষ্য: {target:,.0f} টাকা | ✅ আদায়: {collected:,.0f} টাকা ({progress*100:.1f}%)")
+        else:
+            st.info("এখনো কোনো টার্গেট সেট করা হয়নি")
+        
+        st.markdown("---")
+        
+        # সাম্প্রতিক লেনদেন
+        st.subheader("📋 সাম্প্রতিক লেনদেন")
+        try:
+            conn = sqlite3.connect('somiti.db')
+            c = conn.cursor()
             c.execute("""
-                SELECT date, amount, month, late_fee, note
-                FROM transactions 
-                WHERE member_id = ? 
-                ORDER BY id DESC LIMIT 20
-            """, (st.session_state.member_id,))
-            transactions = c.fetchall()
+                SELECT m.name, m.id, t.amount, t.date, t.month 
+                FROM transactions t
+                JOIN members m ON t.member_id = m.id
+                ORDER BY t.id DESC LIMIT 10
+            """)
+            recent = c.fetchall()
+            conn.close()
             
-            if transactions:
-                df = pd.DataFrame(transactions, columns=["তারিখ", "টাকা", "মাস", "লেট ফি", "নোট"])
+            if recent:
+                df = pd.DataFrame(recent, columns=["নাম", "আইডি", "টাকা", "তারিখ", "মাস"])
                 st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                # এক্সেল ডাউনলোড
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, sheet_name='লেনদেন', index=False)
-                
-                st.download_button(
-                    label="📥 এক্সেল ডাউনলোড",
-                    data=output.getvalue(),
-                    file_name=f"{member_id}_statement.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
             else:
                 st.info("এখনো কোনো লেনদেন হয়নি")
+        except:
+            pass
+    
+    elif menu == "➕ নতুন সদস্য":
+        st.markdown("### ➕ নতুন সদস্য নিবন্ধন")
         
-        elif menu == "🔑 পাসওয়ার্ড পরিবর্তন":
-            st.markdown("### 🔑 পাসওয়ার্ড পরিবর্তন")
-            
-            curr = st.text_input("বর্তমান পাসওয়ার্ড", type="password", key="mem_curr")
-            new = st.text_input("নতুন পাসওয়ার্ড", type="password", key="mem_new")
-            conf = st.text_input("নিশ্চিত করুন", type="password", key="mem_conf")
-            
-            if st.button("🔄 পরিবর্তন করুন", type="primary", key="mem_btn"):
-                c.execute("SELECT password FROM members WHERE id = ?", (st.session_state.member_id,))
+        name = st.text_input("নাম *", key="new_name")
+        phone = st.text_input("মোবাইল নম্বর *", placeholder="017XXXXXXXX", key="new_phone")
+        telegram_id = st.text_input("টেলিগ্রাম চ্যাট আইডি *", key="new_telegram")
+        monthly = st.number_input("মাসিক কিস্তি (টাকা)", value=500, step=50, key="new_monthly")
+        
+        if st.button("✅ সদস্য যোগ করুন", type="primary", key="new_btn"):
+            if not name or not phone or not telegram_id:
+  OM members WHERE id = ?", (st.session_state.member_id,))
                 stored = c.fetchone()[0]
                 
                 if curr != stored:
