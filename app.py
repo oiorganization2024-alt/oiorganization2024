@@ -69,6 +69,7 @@ DEFAULT_TEMPLATES = {
 # হেডার স্টাইল (আপডেটেড কালার)
 # ============================================
 def show_header():
+    # ডাটাবেজ থেকে মোট টাকা আনা
     conn = sqlite3.connect('somiti.db')
     c = conn.cursor()
     c.execute("SELECT SUM(total_savings) FROM members WHERE status = 'active'")
@@ -77,182 +78,88 @@ def show_header():
     
     st.markdown(f"""
     <style>
-    .main {{
-        background-color: #F5F7FA;
-    }}
-    
-    section[data-testid="stSidebar"] {{
-        background-color: #FAFBFD;
-        border-right: 1px solid #E8ECF1;
-    }}
-    
+    /* হেডার - নীল গ্রেডিয়েন্ট (আগের মত) */
     .somiti-header {{
-        background: linear-gradient(135deg, #0B4619 0%, #1B7A34 50%, #2EAA67 100%);
-        padding: 25px 20px;
-        border-radius: 15px 15px 0 0;
+        background: linear-gradient(135deg, #0066CC 0%, #0099CC 100%);
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
         text-align: center;
-        box-shadow: 0 6px 12px rgba(0,0,0,0.08);
-        margin-top: -10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }}
     
     .somiti-header h1 {{
-        color: #FFFFFF;
-        font-size: 36px;
-        font-weight: 700;
+        color: white;
+        font-size: 32px;
+        font-weight: bold;
         margin: 0;
-        text-shadow: 2px 2px 8px rgba(0,0,0,0.2);
-        letter-spacing: 1px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
     }}
     
     .somiti-header p {{
-        color: #D4F5E2;
+        color: #E0F0FF;
         font-size: 14px;
-        margin: 8px 0 0 0;
-        font-weight: 400;
-        letter-spacing: 0.5px;
+        margin: 5px 0 0 0;
     }}
     
+    /* টোটাল টাকার বক্স - সবুজ (আগের মত) */
     .total-box {{
-        background: linear-gradient(135deg, #D4A017 0%, #F5B041 50%, #F9C74F 100%);
-        padding: 20px 15px;
-        border-radius: 0 0 15px 15px;
+        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        padding: 15px;
+        border-radius: 10px;
         text-align: center;
-        margin-bottom: 25px;
-        box-shadow: 0 6px 12px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }}
     
     .total-box h2 {{
-        color: #1A1A1A;
-        font-size: 32px;
-        font-weight: 800;
+        color: white;
+        font-size: 28px;
+        font-weight: bold;
         margin: 0;
-        text-shadow: 1px 1px 2px rgba(255,255,255,0.3);
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
     }}
     
     .total-box p {{
-        color: #4A3000;
+        color: #E0FFE0;
         font-size: 14px;
         margin: 5px 0 0 0;
-        font-weight: 500;
-        letter-spacing: 0.5px;
     }}
     
+    /* বাটন স্টাইল - নীল */
     .stButton > button {{
-        background: linear-gradient(135deg, #0B4619 0%, #1B7A34 100%);
+        background-color: #0066CC;
         color: white;
         font-weight: 600;
         border: none;
         border-radius: 8px;
         padding: 10px 20px;
         transition: all 0.3s ease;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }}
     
     .stButton > button:hover {{
-        background: linear-gradient(135deg, #1B7A34 0%, #2EAA67 100%);
+        background-color: #0052A3;
         box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        transform: translateY(-1px);
     }}
     
+    /* প্রাইমারি বাটন - সবুজ */
     .stButton > button[kind="primary"] {{
-        background: linear-gradient(135deg, #D4A017 0%, #F5B041 100%);
-        color: #1A1A1A;
-        font-weight: 700;
-    }}
-    
-    .stButton > button[kind="primary"]:hover {{
-        background: linear-gradient(135deg, #F5B041 0%, #F9C74F 100%);
-    }}
-    
-    div[data-testid="metric-container"] {{
-        background: white;
-        border-radius: 12px;
-        padding: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        border: 1px solid #E8ECF1;
-    }}
-    
-    .stDataFrame {{
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }}
-    
-    .stTextInput > div > div > input,
-    .stSelectbox > div > div {{
-        border-radius: 8px;
-        border: 1px solid #D0D7DE;
-    }}
-    
-    .stTextInput > div > div > input:focus {{
-        border-color: #1B7A34;
-        box-shadow: 0 0 0 2px rgba(27,122,52,0.1);
-    }}
-    
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 8px;
-        background-color: transparent;
-    }}
-    
-    .stTabs [data-baseweb="tab"] {{
-        border-radius: 8px 8px 0 0;
-        padding: 10px 20px;
-        background-color: #F0F2F6;
-        border: none;
-        font-weight: 500;
-    }}
-    
-    .stTabs [aria-selected="true"] {{
-        background: linear-gradient(135deg, #0B4619 0%, #1B7A34 100%);
+        background-color: #28a745;
         color: white;
     }}
     
-    .stSuccess {{
-        background-color: #D4EDDA;
-        border-left: 4px solid #28A745;
-        color: #155724;
-        border-radius: 8px;
+    .stButton > button[kind="primary"]:hover {{
+        background-color: #218838;
     }}
     
-    .stError {{
-        background-color: #F8D7DA;
-        border-left: 4px solid #DC3545;
-        color: #721C24;
-        border-radius: 8px;
-    }}
-    
-    .stWarning {{
-        background-color: #FFF3CD;
-        border-left: 4px solid #F5B041;
-        color: #856404;
-        border-radius: 8px;
-    }}
-    
-    .stInfo {{
-        background-color: #D1ECF1;
-        border-left: 4px solid #17A2B8;
-        color: #0C5460;
-        border-radius: 8px;
-    }}
-    
-    .streamlit-expanderHeader {{
-        background-color: #F8F9FA;
-        border-radius: 8px;
-        border: 1px solid #E8ECF1;
-    }}
-    
-    .stRadio > div {{
-        background-color: #FAFBFD;
-        padding: 10px;
-        border-radius: 10px;
-    }}
-    
+    /* লগইন কার্ড */
     .login-card {{
+        max-width: 400px;
+        margin: 30px auto;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         background: white;
-        border-radius: 16px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-        border: 1px solid #E8ECF1;
     }}
     </style>
     
