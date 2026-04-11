@@ -15,6 +15,9 @@ import base64
 IMGBB_API_KEY = "9479d7a2b0908f8a9b353df1e2c38e00"
 TELEGRAM_BOT_TOKEN = "8752100386:AAEa-vMD4yPCKE0LPTFx-198Llbf8qZFgE8"
 ADMIN_CHAT_ID = "8548828754"
+
+# এডমিন লগইন তথ্য
+ADMIN_MOBILE = "01766222373"
 ADMIN_PASSWORD = "oio112024"
 
 # সমিতির নাম
@@ -24,7 +27,6 @@ SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
 # হেডার স্টাইল
 # ============================================
 def show_header():
-    """সব পেজের উপরে সমিতির নাম দেখানোর জন্য"""
     st.markdown(f"""
     <style>
     .somiti-header {{
@@ -207,29 +209,22 @@ def login_screen():
     </style>
     """, unsafe_allow_html=True)
     
-    query_params = st.query_params
-    is_admin_mode = query_params.get("admin", [False])[0]
-    
     with st.container():
         st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.title("🔐 লগইন")
         
-        if is_admin_mode:
-            st.title("🔐 এডমিন লগইন")
-            password = st.text_input("এডমিন পাসওয়ার্ড", type="password")
-            
-            if st.button("প্রবেশ করুন"):
-                if password == ADMIN_PASSWORD:
-                    st.session_state.logged_in = True
-                    st.session_state.user_type = 'admin'
-                    st.rerun()
-                else:
-                    st.error("❌ ভুল পাসওয়ার্ড")
-        else:
-            st.title("👤 সদস্য লগইন")
-            phone = st.text_input("মোবাইল নম্বর")
-            password = st.text_input("পাসওয়ার্ড", type="password")
-            
-            if st.button("লগইন"):
+        phone = st.text_input("📱 মোবাইল নম্বর", placeholder="017XXXXXXXX")
+        password = st.text_input("🔑 পাসওয়ার্ড", type="password")
+        
+        if st.button("প্রবেশ করুন", type="primary"):
+            # এডমিন চেক
+            if phone == ADMIN_MOBILE and password == ADMIN_PASSWORD:
+                st.session_state.logged_in = True
+                st.session_state.user_type = 'admin'
+                st.success("✅ এডমিন হিসেবে লগইন সফল!")
+                st.rerun()
+            else:
+                # সাধারণ সদস্য চেক
                 conn = sqlite3.connect('somiti.db')
                 c = conn.cursor()
                 c.execute("SELECT id, password FROM members WHERE phone = ?", (phone,))
@@ -240,12 +235,13 @@ def login_screen():
                     st.session_state.logged_in = True
                     st.session_state.user_type = 'member'
                     st.session_state.member_id = result[0]
+                    st.success("✅ লগইন সফল!")
                     st.rerun()
                 else:
                     st.error("❌ ভুল মোবাইল নম্বর বা পাসওয়ার্ড")
-            
-            st.markdown("---")
-            st.caption("পাসওয়ার্ড ভুলে গেলে এডমিনের সাথে যোগাযোগ করুন")
+        
+        st.markdown("---")
+        st.caption("পাসওয়ার্ড ভুলে গেলে এডমিনের সাথে যোগাযোগ করুন: 01766222373")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -255,6 +251,7 @@ def admin_dashboard():
     
     with st.sidebar:
         st.title("📋 এডমিন মেনু")
+        st.caption(f"👑 এডমিন | {ADMIN_MOBILE}")
         menu = st.radio(
             "নেভিগেশন",
             ["🏠 ড্যাশবোর্ড", "➕ নতুন সদস্য", "💵 টাকা জমা", "📊 রিপোর্ট", "🚪 লগআউট"]
@@ -333,6 +330,8 @@ def admin_dashboard():
             if submitted:
                 if not name or not phone or not telegram_id:
                     st.error("❌ নাম, মোবাইল এবং টেলিগ্রাম আইডি আবশ্যক")
+                elif phone == ADMIN_MOBILE:
+                    st.error("❌ এটি এডমিনের মোবাইল নম্বর। অন্য নম্বর ব্যবহার করুন।")
                 else:
                     photo_url = None
                     if photo:
@@ -641,8 +640,6 @@ def member_dashboard():
 🔐 <b>পাসওয়ার্ড পরিবর্তন - {SOMITI_NAME}</b>
 
 আপনার পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে।
-
-আপনি যদি এটি না করে থাকেন তবে এডমিনকে জানান।
 """
                         send_telegram_message(chat_id, message)
     
