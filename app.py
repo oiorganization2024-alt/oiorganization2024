@@ -11,11 +11,9 @@ from email.mime.multipart import MIMEMultipart
 import os
 import shutil
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 
 # ============================================
 # কনফিগারেশন / Configuration
@@ -26,33 +24,31 @@ SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
 SOMITI_NAME_EN = "Oikko Uddog Songstha"
 SOMITI_START_DATE = "2026-04-12"
 
-# ইমেইল কনফিগারেশন / Email Configuration
+# ইমেইল কনফিগারেশন
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "oiorganization2024@gmail.com"
 SENDER_PASSWORD = "hnhm ocix kyxv ioiz"
 
 # ============================================
-# পেজ কনফিগ / Page Configuration
+# পেজ কনফিগ
 # ============================================
 st.set_page_config(page_title=SOMITI_NAME, page_icon="🌾", layout="wide")
 
-# URL প্যারামিটার / URL Parameters
 query_params = st.query_params
 member_login_id = query_params.get("member")
 
 # ============================================
-# ভাষা সেটিংস / Language Settings
+# ভাষা সেটিংস
 # ============================================
 if 'language' not in st.session_state:
     st.session_state.language = 'bn'
 
 def t(bn_text, en_text):
-    """ভাষা অনুযায়ী টেক্সট রিটার্ন করে"""
     return bn_text if st.session_state.language == 'bn' else en_text
 
 # ============================================
-# বাংলা মাসের নাম / Month Names
+# মাসের নাম
 # ============================================
 BANGLA_MONTHS = {
     1: "জানুয়ারি", 2: "ফেব্রুয়ারি", 3: "মার্চ", 4: "এপ্রিল",
@@ -67,23 +63,15 @@ ENGLISH_MONTHS = {
 }
 
 # ============================================
-# ডাটাবেজ সেটআপ / Database Setup
+# ডাটাবেজ সেটআপ
 # ============================================
 def init_database():
-    """ডাটাবেজ তৈরি করে যদি না থাকে"""
     conn = sqlite3.connect('somiti.db')
     c = conn.cursor()
     
-    # সেটিংস টেবিল
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_date', ?)", (SOMITI_START_DATE,))
     
-    # সদস্য টেবিল
     c.execute('''
         CREATE TABLE IF NOT EXISTS members (
             id TEXT PRIMARY KEY,
@@ -98,13 +86,11 @@ def init_database():
         )
     ''')
     
-    # ইমেইল কলাম যোগ
     try:
         c.execute("SELECT email FROM members LIMIT 1")
     except:
         c.execute("ALTER TABLE members ADD COLUMN email TEXT")
     
-    # লেনদেন টেবিল
     c.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,7 +111,6 @@ def init_database():
         )
     ''')
     
-    # মাইগ্রেশন
     try:
         c.execute("SELECT day FROM transactions LIMIT 1")
     except:
@@ -140,7 +125,6 @@ def init_database():
             except:
                 pass
     
-    # খরচ টেবিল
     c.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,7 +135,6 @@ def init_database():
         )
     ''')
     
-    # উত্তোলন টেবিল
     c.execute('''
         CREATE TABLE IF NOT EXISTS withdrawals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,7 +152,6 @@ def init_database():
     conn.close()
 
 def check_and_archive_old_data():
-    """২০ বছর পর পুরনো ডাটা আর্কাইভ করে"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -200,10 +182,9 @@ def check_and_archive_old_data():
         pass
 
 # ============================================
-# ইমেইল ফাংশন / Email Functions
+# ইমেইল ফাংশন
 # ============================================
 def send_email(to_email, subject, message):
-    """ইমেইল পাঠায়"""
     if not to_email or '@' not in to_email:
         return False
     try:
@@ -244,7 +225,6 @@ def send_email(to_email, subject, message):
         return False
 
 def get_welcome_email(name, member_id, phone, password, monthly):
-    """স্বাগতম ইমেইল"""
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 ═══════════════════════════════════════════════════════════════════
@@ -270,7 +250,6 @@ def get_welcome_email(name, member_id, phone, password, monthly):
 {SOMITI_NAME}"""
 
 def get_payment_success_email(name, amount, full_date, full_date_en, month_name, month_name_en, total_savings):
-    """পেমেন্ট সফল ইমেইল"""
     display_date = full_date if st.session_state.language == 'bn' else full_date_en
     display_month = month_name if st.session_state.language == 'bn' else month_name_en
     
@@ -292,7 +271,6 @@ def get_payment_success_email(name, amount, full_date, full_date_en, month_name,
 {SOMITI_NAME}"""
 
 def get_password_reset_email(name, new_password):
-    """পাসওয়ার্ড রিসেট ইমেইল"""
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 🔐 {t('পাসওয়ার্ড রিসেট', 'Password Reset')} - {SOMITI_NAME}
@@ -304,7 +282,6 @@ def get_password_reset_email(name, new_password):
 {SOMITI_NAME}"""
 
 def get_transaction_edit_email(name, old_amount, new_amount, full_date, full_date_en, total_savings):
-    """লেনদেন এডিট ইমেইল"""
     display_date = full_date if st.session_state.language == 'bn' else full_date_en
     return f"""{t('প্রিয়', 'Dear')} {name},
 
@@ -318,7 +295,6 @@ def get_transaction_edit_email(name, old_amount, new_amount, full_date, full_dat
 {SOMITI_NAME}"""
 
 def get_transaction_remove_email(name, amount, full_date, full_date_en, total_savings):
-    """লেনদেন রিমুভ ইমেইল"""
     display_date = full_date if st.session_state.language == 'bn' else full_date_en
     return f"""{t('প্রিয়', 'Dear')} {name},
 
@@ -331,7 +307,6 @@ def get_transaction_remove_email(name, amount, full_date, full_date_en, total_sa
 {SOMITI_NAME}"""
 
 def get_withdrawal_notification(name, amount, description, date, previous_balance, current_balance):
-    """উত্তোলন নোটিফিকেশন"""
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 🏧 {t('টাকা উত্তোলনের নোটিশ', 'Withdrawal Notice')} - {SOMITI_NAME}
@@ -345,7 +320,6 @@ def get_withdrawal_notification(name, amount, description, date, previous_balanc
 {SOMITI_NAME}"""
 
 def get_lottery_winner_email(name):
-    """লটারি বিজয়ী ইমেইল"""
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 🎉 {t('অভিনন্দন!', 'Congratulations!')}
@@ -354,10 +328,9 @@ def get_lottery_winner_email(name):
 {SOMITI_NAME}"""
 
 # ============================================
-# হেল্পার ফাংশন / Helper Functions
+# হেল্পার ফাংশন
 # ============================================
 def generate_member_id():
-    """নতুন সদস্য আইডি (৫ ডিজিট)"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -369,11 +342,9 @@ def generate_member_id():
         return "10001"
 
 def generate_password():
-    """র্যান্ডম পাসওয়ার্ড"""
     return ''.join(random.choices(string.digits, k=6))
 
 def get_total_savings():
-    """মোট জমা"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -385,7 +356,6 @@ def get_total_savings():
         return 0
 
 def get_total_expenses():
-    """মোট খরচ"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -397,7 +367,6 @@ def get_total_expenses():
         return 0
 
 def get_total_withdrawals():
-    """মোট উত্তোলন"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -409,11 +378,9 @@ def get_total_withdrawals():
         return 0
 
 def get_cash_balance():
-    """ক্যাশ ব্যালেন্স"""
     return get_total_savings() - get_total_expenses() - get_total_withdrawals()
 
 def get_paid_members():
-    """চলতি মাসে জমা দেওয়া সদস্য"""
     try:
         current = datetime.now()
         conn = sqlite3.connect('somiti.db')
@@ -432,7 +399,6 @@ def get_paid_members():
         return []
 
 def get_unpaid_members():
-    """চলতি মাসে জমা না দেওয়া সদস্য"""
     try:
         current = datetime.now()
         conn = sqlite3.connect('somiti.db')
@@ -465,7 +431,6 @@ def get_unpaid_members():
         return []
 
 def get_member_transactions(member_id):
-    """সদস্যের লেনদেন ইতিহাস"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -482,7 +447,6 @@ def get_member_transactions(member_id):
         return []
 
 def get_all_members():
-    """সকল সদস্য"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -498,7 +462,6 @@ def get_all_members():
         return []
 
 def get_member_by_id(member_id):
-    """আইডি দিয়ে সদস্য খুঁজুন"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -510,7 +473,6 @@ def get_member_by_id(member_id):
         return None
 
 def get_all_expenses():
-    """সকল খরচ"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -522,7 +484,6 @@ def get_all_expenses():
         return []
 
 def get_all_withdrawals():
-    """সকল উত্তোলন"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -534,7 +495,6 @@ def get_all_withdrawals():
         return []
 
 def get_monthly_report():
-    """মাসিক রিপোর্ট"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -552,7 +512,6 @@ def get_monthly_report():
         return []
 
 def pick_lottery_winner():
-    """লটারি বিজয়ী"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -570,11 +529,9 @@ def pick_lottery_winner():
         return None
 
 def get_app_url():
-    """অ্যাপ URL"""
     return "https://oiorganization2024.streamlit.app"
 
 def get_current_month_collection():
-    """চলতি মাসের জমা"""
     try:
         current = datetime.now()
         conn = sqlite3.connect('somiti.db')
@@ -588,10 +545,9 @@ def get_current_month_collection():
         return 0
 
 # ============================================
-# UI স্টাইল / UI Style
+# UI স্টাইল
 # ============================================
 def apply_dark_theme():
-    """ডার্ক থিম"""
     st.markdown("""
     <style>
     .stApp { background: linear-gradient(135deg, #0d1117 0%, #161b22 100%); }
@@ -613,7 +569,6 @@ def apply_dark_theme():
     """, unsafe_allow_html=True)
 
 def show_header():
-    """পাবলিক হেডার"""
     total = get_total_savings()
     st.markdown(f"""
     <div class="somiti-header"><h1>🌾 {SOMITI_NAME} 🌾</h1><p>{t('সঞ্চয় ও ঋণ ব্যবস্থাপনা', 'Savings & Loan Management')}</p></div>
@@ -621,7 +576,6 @@ def show_header():
     """, unsafe_allow_html=True)
 
 def show_admin_header():
-    """এডমিন হেডার"""
     total = get_total_savings()
     cash = get_cash_balance()
     st.markdown(f'<div class="somiti-header"><h1>🌾 {SOMITI_NAME} 🌾</h1><p>{t("সঞ্চয় ও ঋণ ব্যবস্থাপনা", "Savings & Loan Management")}</p></div>', unsafe_allow_html=True)
@@ -630,10 +584,9 @@ def show_admin_header():
     with col2: st.markdown(f'<div class="cash-box"><h2>💵 {cash:,.0f} {t("টাকা", "Taka")}</h2><p>{t("ক্যাশ ব্যালেন্স", "Cash Balance")}</p></div>', unsafe_allow_html=True)
 
 # ============================================
-# পিডিএফ জেনারেটর / PDF Generator
+# পিডিএফ জেনারেটর
 # ============================================
 def generate_pdf_member_list():
-    """সদস্য তালিকা পিডিএফ"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
@@ -661,7 +614,6 @@ def generate_pdf_member_list():
     return buffer
 
 def generate_pdf_transactions(member_id=None):
-    """লেনদেন পিডিএফ"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
@@ -711,10 +663,9 @@ def generate_pdf_transactions(member_id=None):
     return buffer
 
 # ============================================
-# মেম্বার প্যানেল / Member Panel
+# মেম্বার প্যানেল
 # ============================================
 def member_login_page(member_id):
-    """সদস্য লগইন"""
     apply_dark_theme()
     
     member = get_member_by_id(member_id)
@@ -744,7 +695,6 @@ def member_login_page(member_id):
             st.error(t("❌ ভুল ইমেইল বা পাসওয়ার্ড", "❌ Wrong email or password"))
 
 def member_dashboard_view():
-    """সদস্য ড্যাশবোর্ড"""
     apply_dark_theme()
     
     member = get_member_by_id(st.session_state.member_id)
@@ -755,7 +705,6 @@ def member_dashboard_view():
     member_id, name, phone, email, password, total_savings, monthly_savings, join_date, status = member
     monthly = monthly_savings or 500
     
-    # হেডার
     st.markdown(f"""
     <div class="somiti-header">
         <h1>🌾 {SOMITI_NAME} 🌾</h1>
@@ -808,10 +757,9 @@ def member_dashboard_view():
         st.info(t("কোনো লেনদেন নেই", "No transactions"))
 
 # ============================================
-# এডমিন লগইন / Admin Login
+# এডমিন লগইন
 # ============================================
 def admin_login_page():
-    """এডমিন লগইন"""
     apply_dark_theme()
     show_header()
     
@@ -828,15 +776,13 @@ def admin_login_page():
             st.error(t("❌ ভুল মোবাইল বা পাসওয়ার্ড", "❌ Wrong mobile or password"))
 
 # ============================================
-# এডমিন প্যানেল / Admin Panel
+# এডমিন প্যানেল
 # ============================================
 def admin_panel():
-    """এডমিন প্যানেল"""
     apply_dark_theme()
     show_admin_header()
     
     with st.sidebar:
-        # ভাষা সিলেক্টর
         st.markdown("### 🌐 " + t("ভাষা", "Language"))
         language = st.radio(
             t("ভাষা নির্বাচন করুন", "Select Language"),
@@ -875,7 +821,6 @@ def admin_panel():
             label_visibility="collapsed"
         )
     
-    # মেনু হ্যান্ডলিং
     if f"🚪 {t('লগআউট', 'Logout')}" in menu:
         if 'admin_logged_in' in st.session_state:
             del st.session_state.admin_logged_in
@@ -960,9 +905,9 @@ def admin_panel():
                             st.rerun()
                     
                     if st.session_state.get(f"edit_{member_id}"):
-                        new_name = st.text_input(t("নাম", "Name"), value=name)
-                        new_email = st.text_input(t("ইমেইল", "Email"), value=email or "")
-                        new_mon = st.number_input(t("কিস্তি", "Monthly"), value=monthly, step=50.0)
+                        new_name = st.text_input(t("নাম", "Name"), value=name, key=f"name_{member_id}")
+                        new_email = st.text_input(t("ইমেইল", "Email"), value=email or "", key=f"email_{member_id}")
+                        new_mon = st.number_input(t("কিস্তি", "Monthly"), value=monthly, step=50.0, key=f"mon_{member_id}")
                         if st.button(f"💾 {t('সেভ', 'Save')}", key=f"save_{member_id}"):
                             conn = sqlite3.connect('somiti.db')
                             c = conn.cursor()
@@ -1342,7 +1287,7 @@ def admin_panel():
                               get_lottery_winner_email(w[1]))
 
 # ============================================
-# মেইন / Main
+# মেইন
 # ============================================
 def main():
     init_database()
