@@ -28,8 +28,11 @@ SENDER_PASSWORD = "hnhm ocix kyxv ioiz"
 
 st.set_page_config(page_title=SOMITI_NAME, page_icon="🌾", layout="wide")
 
-query_params = st.query_params
-member_login_id = query_params.get("member")
+try:
+    query_params = st.query_params
+    member_login_id = query_params.get("member") if query_params else None
+except:
+    member_login_id = None
 
 if 'language' not in st.session_state:
     st.session_state.language = 'bn'
