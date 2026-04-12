@@ -11,7 +11,7 @@ from io import BytesIO
 # কনফিগারেশন
 # ============================================
 TELEGRAM_BOT_TOKEN = "8752100386:AAEa-vMD4yPCKE0LPTFx-198Llbf8qZFgE8"
-CHANNEL_CHAT_ID = "-1002392909031"  # getUpdates থেকে সঠিক আইডি বসান
+CHANNEL_CHAT_ID = "8752100386"  # getUpdates থেকে সঠিক আইডি বসান
 ADMIN_MOBILE = "01766222373"
 ADMIN_PASSWORD = "oio112024"
 SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
