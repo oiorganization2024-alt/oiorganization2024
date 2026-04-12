@@ -127,7 +127,6 @@ def init_database():
             created_at TEXT NOT NULL
         )
     ''')
-    # 🆕 নতুন টেবিল: ফান্ড ট্রানজেকশন
     c.execute('''
         CREATE TABLE IF NOT EXISTS fund_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,29 +204,29 @@ def send_email(to_email, subject, message):
         server.send_message(msg)
         server.quit()
         return True
-    except:
+    except Exception as e:
+        print(f"Email error: {e}")
         return False
 
-# 🆕 বাল্ক ইমেইল ফাংশন
 def send_bulk_email_to_all_active_members(subject, message_template_func, **kwargs):
-    """সকল সক্রিয় সদস্যকে ইমেইল পাঠানো"""
     try:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
-        c.execute("SELECT name, email FROM members WHERE status = 'active' AND email IS NOT NULL AND email != ''")
+        c.execute("SELECT name, email, monthly_savings FROM members WHERE status = 'active' AND email IS NOT NULL AND email != ''")
         members = c.fetchall()
         conn.close()
         sent = 0
-        for name, email in members:
-            message = message_template_func(name=name, **kwargs)
+        for name, email, monthly in members:
+            monthly = float(monthly) if monthly else 500.0
+            message = message_template_func(name=name, monthly_amount=monthly, **kwargs)
             if send_email(email, subject, message):
                 sent += 1
         return sent
-    except:
+    except Exception as e:
+        print(f"Bulk email error: {e}")
         return 0
 
 def send_bulk_email_to_unpaid_members(subject, message_template_func, **kwargs):
-    """শুধু বকেয়াদার সদস্যদের ইমেইল পাঠানো"""
     try:
         current = datetime.now()
         conn = sqlite3.connect('somiti.db')
@@ -253,15 +252,16 @@ def send_bulk_email_to_unpaid_members(subject, message_template_func, **kwargs):
         sent = 0
         month_name = BANGLA_MONTHS[current.month] if st.session_state.language == 'bn' else ENGLISH_MONTHS[current.month]
         for name, email, monthly, savings in members:
+            monthly = float(monthly) if monthly else 500.0
+            savings = float(savings) if savings else 0.0
             due = monthly
             message = message_template_func(name=name, monthly_amount=monthly, due_amount=due, month_name=month_name, **kwargs)
             if send_email(email, subject, message):
                 sent += 1
         return sent
-    except:
+    except Exception as e:
+        print(f"Unpaid bulk email error: {e}")
         return 0
-
-# ============ ইমেইল টেমপ্লেট ফাংশন ============
 
 def get_welcome_email(name, member_id, phone, password, monthly):
     app_url = get_app_url()
@@ -352,24 +352,26 @@ def get_lottery_winner_email(name):
 
 {SOMITI_NAME}"""
 
-# 🆕 নতুন ইমেইল টেমপ্লেট ফাংশন
 def get_first_reminder_email(name, monthly_amount):
+    monthly_amount = float(monthly_amount) if monthly_amount else 500.0
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 📢 {t('মাসিক কিস্তি রিমাইন্ডার', 'Monthly Installment Reminder')} - {SOMITI_NAME}
 
-{t('আগামী ১০ তারিখের মধ্যে আপনার মাসিক কিস্তি', 'Please pay your monthly installment before the 10th')} {monthly_amount} {t('টাকা জমা দেওয়ার জন্য স্মরণ করিয়ে দেওয়া হচ্ছে', 'Taka')}.
+{t('আগামী ১০ তারিখের মধ্যে আপনার মাসিক কিস্তি', 'Please pay your monthly installment before the 10th')} {monthly_amount:,.0f} {t('টাকা জমা দেওয়ার জন্য স্মরণ করিয়ে দেওয়া হচ্ছে', 'Taka')}.
 
 {t('ধন্যবাদ', 'Thank you')},
 {SOMITI_NAME}"""
 
 def get_tenth_reminder_email(name, monthly_amount, due_amount, month_name):
+    monthly_amount = float(monthly_amount) if monthly_amount else 500.0
+    due_amount = float(due_amount) if due_amount else monthly_amount
     return f"""{t('প্রিয়', 'Dear')} {name},
 
 ⚠️ {t('বকেয়া রিমাইন্ডার', 'Due Reminder')} - {SOMITI_NAME}
 
-{t('আপনার', 'Your')} {month_name} {t('মাসের কিস্তি', 'installment')} {monthly_amount} {t('টাকা এখনো জমা পড়েনি', 'Taka has not been paid yet')}.
-{t('বর্তমানে আপনার বকেয়া', 'Current due')}: {due_amount} {t('টাকা', 'Taka')}.
+{t('আপনার', 'Your')} {month_name} {t('মাসের কিস্তি', 'installment')} {monthly_amount:,.0f} {t('টাকা এখনো জমা পড়েনি', 'Taka has not been paid yet')}.
+{t('বর্তমানে আপনার বকেয়া', 'Current due')}: {due_amount:,.0f} {t('টাকা', 'Taka')}.
 
 🙏 {t('অনুগ্রহ করে দ্রুত জমা দিন', 'Please pay as soon as possible')}.
 
@@ -408,9 +410,9 @@ def get_total_savings():
         c.execute("SELECT SUM(total_savings) FROM members WHERE status = 'active'")
         total = c.fetchone()[0] or 0
         conn.close()
-        return total
+        return float(total)
     except:
-        return 0
+        return 0.0
 
 def get_total_expenses():
     try:
@@ -419,9 +421,9 @@ def get_total_expenses():
         c.execute("SELECT SUM(amount) FROM expenses")
         total = c.fetchone()[0] or 0
         conn.close()
-        return total
+        return float(total)
     except:
-        return 0
+        return 0.0
 
 def get_total_withdrawals():
     try:
@@ -430,11 +432,10 @@ def get_total_withdrawals():
         c.execute("SELECT SUM(amount) FROM withdrawals")
         total = c.fetchone()[0] or 0
         conn.close()
-        return total
+        return float(total)
     except:
-        return 0
+        return 0.0
 
-# 🆕 ফান্ড ব্যালেন্স ফাংশন
 def get_fund_balance():
     try:
         conn = sqlite3.connect('somiti.db')
@@ -442,9 +443,9 @@ def get_fund_balance():
         c.execute("SELECT SUM(CASE WHEN type='deposit' THEN amount ELSE -amount END) FROM fund_transactions")
         balance = c.fetchone()[0] or 0
         conn.close()
-        return balance
+        return float(balance)
     except:
-        return 0
+        return 0.0
 
 def get_cash_balance():
     return get_total_savings() - get_total_expenses() - get_total_withdrawals()
@@ -617,9 +618,9 @@ def get_current_month_collection():
                  (current.month, current.year))
         total = c.fetchone()[0] or 0
         conn.close()
-        return total
+        return float(total)
     except:
-        return 0
+        return 0.0
 
 def apply_dark_theme():
     st.markdown("""
@@ -672,7 +673,9 @@ def generate_pdf_member_list():
     members = get_all_members()
     data = [[t('আইডি', 'ID'), t('নাম', 'Name'), t('মোবাইল', 'Mobile'), t('কিস্তি', 'Monthly'), t('জমা', 'Savings')]]
     for m in members:
-        data.append([m[0], m[1], m[2], f"{m[6]:,.0f}", f"{m[7]:,.0f}"])
+        monthly = float(m[6]) if m[6] else 500.0
+        savings = float(m[7]) if m[7] else 0.0
+        data.append([m[0], m[1], m[2], f"{monthly:,.0f}", f"{savings:,.0f}"])
     table = Table(data)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a5276')),
@@ -700,7 +703,8 @@ def generate_pdf_member_transactions(member_id):
     trans = get_member_transactions(member_id)
     data = [[t('তারিখ', 'Date'), t('পরিমাণ', 'Amount'), t('মাস', 'Month'), t('সাল', 'Year')]]
     for tr_row in trans:
-        data.append([tr_row[1], f"{tr_row[3]:,.0f}", tr_row[4], str(tr_row[6])])
+        amount = float(tr_row[3]) if tr_row[3] else 0.0
+        data.append([tr_row[1], f"{amount:,.0f}", tr_row[4], str(tr_row[6])])
     if data:
         table = Table(data)
         table.setStyle(TableStyle([
@@ -731,7 +735,8 @@ def generate_pdf_transactions(member_id=None):
         trans = get_member_transactions(member_id)
         data = [[t('তারিখ', 'Date'), t('পরিমাণ', 'Amount'), t('মাস', 'Month'), t('সাল', 'Year')]]
         for tr_row in trans:
-            data.append([tr_row[1], f"{tr_row[3]:,.0f}", tr_row[4], str(tr_row[6])])
+            amount = float(tr_row[3]) if tr_row[3] else 0.0
+            data.append([tr_row[1], f"{amount:,.0f}", tr_row[4], str(tr_row[6])])
     else:
         conn = sqlite3.connect('somiti.db')
         c = conn.cursor()
@@ -745,7 +750,8 @@ def generate_pdf_transactions(member_id=None):
         conn.close()
         data = [[t('তারিখ', 'Date'), t('সদস্য', 'Member'), t('পরিমাণ', 'Amount'), t('মাস', 'Month'), t('সাল', 'Year')]]
         for tr_row in trans:
-            data.append([tr_row[0], tr_row[1], f"{tr_row[2]:,.0f}", tr_row[3], str(tr_row[4])])
+            amount = float(tr_row[2]) if tr_row[2] else 0.0
+            data.append([tr_row[0], tr_row[1], f"{amount:,.0f}", tr_row[3], str(tr_row[4])])
     if data:
         table = Table(data)
         table.setStyle(TableStyle([
@@ -761,7 +767,6 @@ def generate_pdf_transactions(member_id=None):
     return buffer
 
 def delete_member_confirmation(member_id, member_name):
-    """সদস্য ডিলিট কনফার্মেশন ডায়ালগ"""
     st.warning(f"⚠️ {t('আপনি কি নিশ্চিত যে আপনি সদস্য', 'Are you sure you want to delete member')} **{member_name}** ({member_id}) {t('ডিলিট করতে চান?', '?')}")
     st.caption(t("⚠️ এই কাজটি undo করা যাবে না। সদস্যের সকল ডাটা মুছে যাবে।", "⚠️ This action cannot be undone. All member data will be deleted."))
     col1, col2 = st.columns(2)
@@ -804,7 +809,8 @@ def member_dashboard_view():
         st.error(t("সদস্য পাওয়া যায়নি", "Member not found"))
         return
     member_id, name, phone, email, password, total_savings, monthly_savings, join_date, status = member
-    monthly = monthly_savings or 500
+    total_savings = float(total_savings) if total_savings else 0.0
+    monthly = float(monthly_savings) if monthly_savings else 500.0
     st.markdown(f"""
     <div class="somiti-header">
         <h1>🌾 {SOMITI_NAME} 🌾</h1>
@@ -826,7 +832,6 @@ def member_dashboard_view():
                     del st.session_state[k]
             st.rerun()
     
-    # 🆕 ট্যাব সিস্টেম
     tab1, tab2, tab3 = st.tabs([
         f"📊 {t('ড্যাশবোর্ড', 'Dashboard')}",
         f"🔐 {t('পাসওয়ার্ড পরিবর্তন', 'Change Password')}",
@@ -845,6 +850,7 @@ def member_dashboard_view():
                  (member_id, current.month, current.year))
         paid = c.fetchone()[0] or 0
         conn.close()
+        paid = float(paid)
         if paid >= monthly:
             st.success(f"✅ {BANGLA_MONTHS[current.month]} {current.year} {t('মাসের কিস্তি পরিশোধ করেছেন', 'monthly paid')}")
         else:
@@ -853,7 +859,7 @@ def member_dashboard_view():
         st.markdown(f"#### 📋 {t('লেনদেন ইতিহাস', 'Transaction History')}")
         trans = get_member_transactions(member_id)
         if trans:
-            df = pd.DataFrame([{t("তারিখ", "Date"): tr_item[1], t("টাকা", "Amount"): f"{tr_item[3]:,.0f}", t("মাস", "Month"): tr_item[4]} for tr_item in trans])
+            df = pd.DataFrame([{t("তারিখ", "Date"): tr_item[1], t("টাকা", "Amount"): f"{float(tr_item[3]):,.0f}", t("মাস", "Month"): tr_item[4]} for tr_item in trans])
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info(t("কোনো লেনদেন নেই", "No transactions"))
@@ -934,7 +940,7 @@ def admin_panel():
                 f"💰 {t('লেনদেন ব্যবস্থাপনা', 'Transactions')}",
                 f"🔗 {t('সদস্য লিংক', 'Member Links')}",
                 f"💸 {t('খরচ ব্যবস্থাপনা', 'Expenses')}",
-                f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}",  # 🆕 নতুন মেনু
+                f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}",
                 f"📊 {t('রিপোর্ট', 'Reports')}",
                 f"📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}",
                 f"📧 {t('ইমেইল টেস্ট', 'Email Test')}",
@@ -951,8 +957,6 @@ def admin_panel():
     
     elif f"🏠 {t('ড্যাশবোর্ড', 'Dashboard')}" in menu:
         st.markdown(f"### 🏠 {t('এডমিন ড্যাশবোর্ড', 'Admin Dashboard')}")
-        
-        # KPI কার্ড
         col1, col2, col3, col4 = st.columns(4)
         try:
             conn = sqlite3.connect('somiti.db')
@@ -992,10 +996,9 @@ def admin_panel():
                     <h2>{unpaid_count}</h2>
                 </div>
                 """, unsafe_allow_html=True)
-        except:
-            pass
+        except Exception as e:
+            st.error(f"Dashboard error: {e}")
         
-        # 🆕 বাল্ক ইমেইল বাটন
         st.markdown("---")
         st.markdown(f"### 📢 {t('বাল্ক ইমেইল', 'Bulk Email')}")
         col1, col2 = st.columns(2)
@@ -1070,7 +1073,6 @@ def admin_panel():
                         if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{member_id}"):
                             st.session_state[f"delete_{member_id}"] = True
                     
-                    # 🆕 ডিলিট কনফার্মেশন
                     if st.session_state.get(f"delete_{member_id}"):
                         result = delete_member_confirmation(member_id, name)
                         if result is True:
@@ -1087,7 +1089,6 @@ def admin_panel():
                             del st.session_state[f"delete_{member_id}"]
                             st.rerun()
                     
-                    # 🆕 বায়ো-ডাটা এডিট ফর্ম
                     if st.session_state.get(f"edit_{member_id}"):
                         with st.form(f"bio_edit_{member_id}"):
                             st.markdown(f"#### 📝 {t('বায়ো-ডাটা এডিট', 'Edit Bio-Data')}")
@@ -1134,10 +1135,11 @@ def admin_panel():
             paid = get_paid_members()
             if paid:
                 for paid_member in paid:
+                    savings_val = float(paid_member[4]) if paid_member[4] else 0.0
                     st.markdown(f"""
                     <div class="member-card">
                         <strong>{paid_member[1]}</strong> ({paid_member[0]})<br>
-                        <small>📱 {paid_member[2]} | 💰 {paid_member[4]:,.0f} {t('টাকা', 'Taka')}</small>
+                        <small>📱 {paid_member[2]} | 💰 {savings_val:,.0f} {t('টাকা', 'Taka')}</small>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -1146,8 +1148,10 @@ def admin_panel():
             unpaid = get_unpaid_members()
             if unpaid:
                 for unpaid_member in unpaid:
+                    savings_val = float(unpaid_member[4]) if unpaid_member[4] else 0.0
+                    monthly_val = float(unpaid_member[3]) if unpaid_member[3] else 500.0
                     with st.expander(f"❌ {unpaid_member[1]} ({unpaid_member[0]})"):
-                        st.write(f"📱 {unpaid_member[2]} | 💰 {unpaid_member[4]:,.0f} {t('টাকা', 'Taka')} | 📅 {t('কিস্তি', 'Monthly')}: {unpaid_member[3]:,.0f}")
+                        st.write(f"📱 {unpaid_member[2]} | 💰 {savings_val:,.0f} {t('টাকা', 'Taka')} | 📅 {t('কিস্তি', 'Monthly')}: {monthly_val:,.0f}")
                         current = datetime.now()
                         day = st.number_input(t("দিন", "Day"), 1, 31, current.day, key=f"day_{unpaid_member[0]}")
                         month = st.selectbox(t("মাস", "Month"), list(BANGLA_MONTHS.keys()), 
@@ -1158,7 +1162,7 @@ def admin_panel():
                             months_count = st.number_input(t("কত মাস", "Months"), 1, 12, 1, key=f"count_{unpaid_member[0]}")
                         with c2:
                             late_fee = st.number_input(t("লেট ফি", "Late Fee"), 0.0, step=10.0, key=f"fee_{unpaid_member[0]}")
-                        total = unpaid_member[3] * months_count + late_fee
+                        total = monthly_val * months_count + late_fee
                         if st.button(f"✅ {t('জমা নিন', 'Deposit')}", key=f"dep_{unpaid_member[0]}", type="primary"):
                             today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             full_date = f"{day} {BANGLA_MONTHS[month]} {year}"
@@ -1167,15 +1171,16 @@ def admin_panel():
                             conn = sqlite3.connect('somiti.db')
                             c = conn.cursor()
                             for i in range(int(months_count)):
+                                # FIXED: Correct number of columns (14 columns)
                                 c.execute("""
                                     INSERT INTO transactions 
-                                    (member_id, amount, transaction_type, day, month, year, month_name, month_name_en, full_date, full_date_en, date_iso, late_fee, created_at)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    (member_id, amount, transaction_type, day, month, year, month_name, month_name_en, full_date, full_date_en, date_iso, note, late_fee, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
-                                    unpaid_member[0], unpaid_member[3], 'deposit', day, month, year, 
+                                    unpaid_member[0], monthly_val, 'deposit', day, month, year, 
                                     BANGLA_MONTHS[month], ENGLISH_MONTHS[month],
                                     full_date, full_date_en, date_iso, 
-                                    late_fee if i == 0 else 0, today_str
+                                    None, late_fee if i == 0 else 0, today_str
                                 ))
                             c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", (total, unpaid_member[0]))
                             c.execute("SELECT total_savings FROM members WHERE id = ?", (unpaid_member[0],))
@@ -1185,7 +1190,7 @@ def admin_panel():
                             if unpaid_member[5]:
                                 send_email(unpaid_member[5], f"✅ {t('পেমেন্ট সফল', 'Payment Success')} - {SOMITI_NAME}", 
                                           get_payment_success_email(unpaid_member[1], f"{total:,.0f}", full_date, full_date_en, 
-                                                                    BANGLA_MONTHS[month], ENGLISH_MONTHS[month], f"{new_total:,.0f}"))
+                                                                    BANGLA_MONTHS[month], ENGLISH_MONTHS[month], f"{float(new_total):,.0f}"))
                             st.success(f"✅ {total:,.0f} {t('টাকা জমা', 'Deposited')}!")
                             st.rerun()
             else:
@@ -1201,20 +1206,21 @@ def admin_panel():
                 member_id = options[selected]
                 member = get_member_by_id(member_id)
                 if member:
-                    st.success(f"👤 {member[1]} | 💰 {member[7]:,.0f} {t('টাকা', 'Taka')}")
+                    savings_val = float(member[7]) if member[7] else 0.0
+                    st.success(f"👤 {member[1]} | 💰 {savings_val:,.0f} {t('টাকা', 'Taka')}")
                     trans_data = get_member_transactions(member_id)
                     if trans_data:
                         for tr_item in trans_data:
                             c1, c2, c3, c4, c5 = st.columns([2, 1.5, 1.5, 1, 1])
                             c1.write(tr_item[1])
-                            c2.write(f"{tr_item[3]:,.0f} {t('টাকা', 'Taka')}")
+                            amount_val = float(tr_item[3]) if tr_item[3] else 0.0
+                            c2.write(f"{amount_val:,.0f} {t('টাকা', 'Taka')}")
                             c3.write(f"{tr_item[4]} {tr_item[6]}")
                             if c4.button("✏️", key=f"edit_{tr_item[0]}"):
                                 st.session_state[f"edit_trans_{tr_item[0]}"] = True
                             if c5.button("🗑️", key=f"del_{tr_item[0]}"):
                                 st.session_state[f"confirm_del_trans_{tr_item[0]}"] = True
                             
-                            # 🆕 ডিলিট কনফার্মেশন
                             if st.session_state.get(f"confirm_del_trans_{tr_item[0]}"):
                                 st.warning(f"⚠️ {t('আপনি কি নিশ্চিত যে আপনি এই লেনদেন ডিলিট করতে চান?', 'Are you sure you want to delete this transaction?')}")
                                 col_yes, col_no = st.columns(2)
@@ -1222,7 +1228,7 @@ def admin_panel():
                                     if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"yes_del_{tr_item[0]}"):
                                         conn = sqlite3.connect('somiti.db')
                                         c = conn.cursor()
-                                        c.execute("UPDATE members SET total_savings = total_savings - ? WHERE id = ?", (tr_item[3], member_id))
+                                        c.execute("UPDATE members SET total_savings = total_savings - ? WHERE id = ?", (amount_val, member_id))
                                         c.execute("DELETE FROM transactions WHERE id = ?", (tr_item[0],))
                                         c.execute("SELECT total_savings FROM members WHERE id = ?", (member_id,))
                                         new_total = c.fetchone()[0]
@@ -1230,7 +1236,7 @@ def admin_panel():
                                         conn.close()
                                         if member[3]:
                                             send_email(member[3], f"🗑️ {t('লেনদেন বাতিল', 'Transaction Cancelled')} - {SOMITI_NAME}", 
-                                                      get_transaction_remove_email(member[1], f"{tr_item[3]:,.0f}", tr_item[1], tr_item[2], f"{new_total:,.0f}"))
+                                                      get_transaction_remove_email(member[1], f"{amount_val:,.0f}", tr_item[1], tr_item[2], f"{float(new_total):,.0f}"))
                                         st.success(f"✅ {t('রিমুভ', 'Removed')}!")
                                         del st.session_state[f"confirm_del_trans_{tr_item[0]}"]
                                         st.rerun()
@@ -1241,11 +1247,11 @@ def admin_panel():
                             
                             if st.session_state.get(f"edit_trans_{tr_item[0]}"):
                                 with st.form(f"edit_{tr_item[0]}"):
-                                    new_amt = st.number_input(t("টাকা", "Amount"), value=float(tr_item[3]), step=50.0)
+                                    new_amt = st.number_input(t("টাকা", "Amount"), value=amount_val, step=50.0)
                                     if st.form_submit_button(f"💾 {t('সেভ', 'Save')}", type="primary"):
                                         conn = sqlite3.connect('somiti.db')
                                         c = conn.cursor()
-                                        diff = new_amt - tr_item[3]
+                                        diff = new_amt - amount_val
                                         c.execute("UPDATE transactions SET amount = ? WHERE id = ?", (new_amt, tr_item[0]))
                                         c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", (diff, member_id))
                                         c.execute("SELECT total_savings FROM members WHERE id = ?", (member_id,))
@@ -1254,7 +1260,7 @@ def admin_panel():
                                         conn.close()
                                         if member[3]:
                                             send_email(member[3], f"✏️ {t('লেনদেন সংশোধন', 'Transaction Edit')} - {SOMITI_NAME}", 
-                                                      get_transaction_edit_email(member[1], f"{tr_item[3]:,.0f}", f"{new_amt:,.0f}", tr_item[1], tr_item[2], f"{new_total:,.0f}"))
+                                                      get_transaction_edit_email(member[1], f"{amount_val:,.0f}", f"{new_amt:,.0f}", tr_item[1], tr_item[2], f"{float(new_total):,.0f}"))
                                         st.success(f"✅ {t('আপডেট', 'Updated')}!")
                                         del st.session_state[f"edit_trans_{tr_item[0]}"]
                                         st.rerun()
@@ -1269,6 +1275,7 @@ def admin_panel():
         app_url = get_app_url()
         for member_row in members_list:
             member_id, name, phone, email, password, status = member_row[:6]
+            monthly = float(member_row[6]) if len(member_row) > 6 and member_row[6] else 500.0
             link = f"{app_url}/?member={member_id}"
             st.markdown(f"""
             <div class="member-card">
@@ -1284,7 +1291,7 @@ def admin_panel():
                 st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{password}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("পাসওয়ার্ড কপি", "Copy Pass")}</button>', unsafe_allow_html=True)
             with c3:
                 if email and st.button(f"📧 {t('ইমেইল', 'Email')}", key=f"mail_{member_id}"):
-                    msg = get_welcome_email(name, member_id, phone, password, member_row[6] if len(member_row) > 6 else 500)
+                    msg = get_welcome_email(name, member_id, phone, password, monthly)
                     send_email(email, f"🔐 {t('লগইন তথ্য', 'Login Info')} - {SOMITI_NAME}", msg)
                     st.success(f"✅ {t('পাঠানো হয়েছে', 'Sent')}!")
             st.markdown("---")
@@ -1317,7 +1324,7 @@ def admin_panel():
                     c1.write(exp_item[1])
                     c2.write(exp_item[4])
                     c3.write(exp_item[2])
-                    c4.write(f"{exp_item[3]:,.0f} {t('টাকা', 'Taka')}")
+                    c4.write(f"{float(exp_item[3]):,.0f} {t('টাকা', 'Taka')}")
                     if c5.button("🗑️", key=f"de_{exp_item[0]}"):
                         conn = sqlite3.connect('somiti.db')
                         c = conn.cursor()
@@ -1325,9 +1332,8 @@ def admin_panel():
                         conn.commit()
                         conn.close()
                         st.rerun()
-                st.metric(f"📊 {t('মোট খরচ', 'Total')}", f"{sum(e_row[3] for e_row in expenses_list):,.0f} {t('টাকা', 'Taka')}")
+                st.metric(f"📊 {t('মোট খরচ', 'Total')}", f"{sum(float(e_row[3]) for e_row in expenses_list):,.0f} {t('টাকা', 'Taka')}")
     
-    # 🆕 ফান্ড ব্যবস্থাপনা মেনু
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
         st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
         cash = get_cash_balance()
@@ -1376,7 +1382,6 @@ def admin_panel():
                         """, ('withdrawal', amount, description, date.strftime("%Y-%m-%d"), cash, cash - amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                         conn.commit()
                         
-                        # পুরনো withdrawals টেবিলেও যোগ করি
                         c.execute("""
                             INSERT INTO withdrawals (date, amount, description, withdrawn_by, previous_balance, current_balance, created_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1416,7 +1421,7 @@ def admin_panel():
                     df_data.append({
                         t("তারিখ", "Date"): ft[1],
                         t("ধরন", "Type"): type_text,
-                        t("পরিমাণ", "Amount"): f"{ft[3]:,.0f}",
+                        t("পরিমাণ", "Amount"): f"{float(ft[3]):,.0f}",
                         t("বিবরণ", "Description"): ft[4]
                     })
                 df = pd.DataFrame(df_data)
@@ -1436,7 +1441,7 @@ def admin_panel():
         with tab2:
             unpaid_list = get_unpaid_members()
             if unpaid_list:
-                df = pd.DataFrame([{t("নাম", "Name"): mu[1], t("মোবাইল", "Mobile"): mu[2], t("কিস্তি", "Monthly"): f"{mu[3]:,.0f}", t("জমা", "Savings"): f"{mu[4]:,.0f}"} for mu in unpaid_list])
+                df = pd.DataFrame([{t("নাম", "Name"): mu[1], t("মোবাইল", "Mobile"): mu[2], t("কিস্তি", "Monthly"): f"{float(mu[3]):,.0f}", t("জমা", "Savings"): f"{float(mu[4]):,.0f}"} for mu in unpaid_list])
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 if st.button(f"📧 {t('বকেয়া রিমাইন্ডার', 'Due Reminder')}", type="primary"):
                     subject = f"⚠️ {t('বকেয়া রিমাইন্ডার', 'Due Reminder')} - {SOMITI_NAME}"
