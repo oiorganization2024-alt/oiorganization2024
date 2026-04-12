@@ -16,7 +16,7 @@ ADMIN_MOBILE = "01766222373"
 ADMIN_PASSWORD = "oio112024"
 SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
 
-# ইমেইল কনফিগারেশন (আপনার দেওয়া)
+# ইমেইল কনফিগারেশন
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "oiorganization2024@gmail.com"
@@ -314,7 +314,7 @@ def get_current_month_collection():
         return 0
 
 # ============================================
-# UI স্টাইল (ডার্ক থিম)
+# UI স্টাইল
 # ============================================
 def apply_dark_theme():
     st.markdown("""
@@ -523,6 +523,13 @@ def admin_panel():
                                 send_email(email, f"🔐 পাসওয়ার্ড রিসেট - {SOMITI_NAME}", f"প্রিয় {name},\n\nআপনার নতুন পাসওয়ার্ড: {new_pass}\n\nলগইন করে পরিবর্তন করুন।")
                             st.success(f"✅ নতুন পাস: {new_pass}")
                             del st.session_state[f"pass_{member_id}"]; st.rerun()
+                    
+                    if st.button("🗑️ ডিলিট", key=f"del_{member_id}"):
+                        conn = sqlite3.connect('somiti.db'); c = conn.cursor()
+                        c.execute("DELETE FROM transactions WHERE member_id=?", (member_id,))
+                        c.execute("DELETE FROM members WHERE id=?", (member_id,))
+                        conn.commit(); conn.close()
+                        st.success("✅ ডিলিট হয়েছে!"); st.rerun()
         else: st.info("কোনো সদস্য নেই")
     
     elif menu == "💵 টাকা জমা":
@@ -582,6 +589,18 @@ def admin_panel():
                                 c.execute("DELETE FROM transactions WHERE id=?", (t[0],))
                                 conn.commit(); conn.close(); st.rerun()
                     else: st.info("কোনো লেনদেন নেই")
+                    
+                    with st.form(f"add_{member_id}"):
+                        st.markdown("#### ➕ নতুন লেনদেন")
+                        amt = st.number_input("টাকা", 0.0, step=50.0)
+                        mon = st.text_input("মাস (YYYY-MM)", datetime.now().strftime("%Y-%m"))
+                        if st.form_submit_button("✅ যোগ"):
+                            if amt > 0:
+                                conn = sqlite3.connect('somiti.db'); c = conn.cursor()
+                                c.execute("INSERT INTO transactions (member_id, amount, transaction_type, month, date) VALUES (?,?,?,?,?)",
+                                         (member_id, amt, 'deposit', mon, datetime.now().strftime("%Y-%m-%d")))
+                                c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id=?", (amt, member_id))
+                                conn.commit(); conn.close(); st.success("✅ যোগ!"); st.rerun()
     
     elif menu == "🔗 সদস্য লিংক":
         st.markdown("### 🔗 সদস্য লিংক ও পাসওয়ার্ড")
@@ -600,6 +619,9 @@ def admin_panel():
             c1, c2 = st.columns(2)
             with c1: st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{link}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 লিংক কপি</button>', unsafe_allow_html=True)
             with c2: st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{password}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 পাসওয়ার্ড কপি</button>', unsafe_allow_html=True)
+            if email and st.button("📧 ইমেইল পাঠান", key=f"mail_{member_id}"):
+                send_email(email, f"🔐 লগইন তথ্য - {SOMITI_NAME}", f"প্রিয় {name},\n\nলিংক: {link}\nমোবাইল: {phone}\nপাসওয়ার্ড: {password}")
+                st.success("✅ পাঠানো হয়েছে!")
             st.markdown("---")
     
     elif menu == "💸 খরচ ব্যবস্থাপনা":
