@@ -6,13 +6,12 @@ import string
 import pandas as pd
 from datetime import datetime, timedelta
 from io import BytesIO
-import time
 
 # ============================================
 # কনফিগারেশন
 # ============================================
 TELEGRAM_BOT_TOKEN = "8752100386:AAEa-vMD4yPCKE0LPTFx-198Llbf8qZFgE8"
-CHANNEL_CHAT_ID = "-1002392909031"  # আপনার চ্যানেলের সঠিক আইডি (নেগেটিভ সহ)
+CHANNEL_CHAT_ID = "-1002392909031"  # getUpdates থেকে সঠিক আইডি বসান
 ADMIN_MOBILE = "01766222373"
 ADMIN_PASSWORD = "oio112024"
 SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
@@ -25,6 +24,13 @@ st.set_page_config(
     page_icon="🌾",
     layout="wide"
 )
+
+# ============================================
+# পাবলিক ভিউ চেক (লগইন ছাড়া)
+# ============================================
+query_params = st.query_params
+public_view = query_params.get("view") == "public"
+member_view_id = query_params.get("member")
 
 # ============================================
 # ডাটাবেজ সেটআপ
@@ -74,7 +80,7 @@ def init_database():
     conn.close()
 
 # ============================================
-# টেলিগ্রাম মেসেজ
+# টেলিগ্রাম মেসেজ - ফিক্সড
 # ============================================
 def send_channel_message(message):
     """টেলিগ্রাম চ্যানেলে মেসেজ পাঠায়"""
@@ -83,11 +89,11 @@ def send_channel_message(message):
         payload = {"chat_id": CHANNEL_CHAT_ID, "text": message}
         response = requests.post(url, json=payload, timeout=10)
         
-        # ডিবাগ তথ্য
-        if response.status_code != 200:
-            st.error(f"টেলিগ্রাম এরর: {response.text}")
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"টেলিগ্রাম এরর: {response.json().get('description', 'Unknown error')}")
             return False
-        return True
     except Exception as e:
         st.error(f"টেলিগ্রাম কানেকশন এরর: {e}")
         return False
@@ -102,18 +108,32 @@ def send_personal_message(chat_id, message):
     except:
         return False
 
-def test_telegram_connection():
-    """টেলিগ্রাম বট কানেকশন টেস্ট"""
+def get_bot_info():
+    """বট তথ্য আনে"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get('ok'):
-                return True, data['result']['first_name']
-        return False, None
+                return data['result']
     except:
-        return False, None
+        pass
+    return None
+
+def get_chat_info():
+    """চ্যাট তথ্য আনে"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getChat"
+        payload = {"chat_id": CHANNEL_CHAT_ID}
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('ok'):
+                return data['result']
+    except:
+        pass
+    return None
 
 # ============================================
 # হেল্পার ফাংশন
@@ -155,7 +175,6 @@ def get_cash_balance():
     return get_total_savings() - get_total_expenses()
 
 def get_paid_members():
-    """চলতি মাসে যারা টাকা জমা দিয়েছে"""
     current_month = datetime.now().strftime("%Y-%m")
     conn = sqlite3.connect('somiti.db')
     c = conn.cursor()
@@ -171,7 +190,6 @@ def get_paid_members():
     return paid
 
 def get_unpaid_members():
-    """চলতি মাসে যারা টাকা জমা দেয়নি"""
     current_month = datetime.now().strftime("%Y-%m")
     conn = sqlite3.connect('somiti.db')
     c = conn.cursor()
@@ -200,17 +218,22 @@ def get_unpaid_members():
     return unpaid
 
 def get_member_transactions(member_id):
-    conn = sqlite3.connect('somiti.db')
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, date, amount, month, late_fee, note
-        FROM transactions 
-        WHERE member_id = ?
-        ORDER BY date DESC
-    """, (member_id,))
-    trans = c.fetchall()
-    conn.close()
-    return trans
+    """সদস্যের লেনদেন ইতিহাস - ফিক্সড"""
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, date, amount, month, late_fee, note
+            FROM transactions 
+            WHERE member_id = ?
+            ORDER BY date DESC
+        """, (member_id,))
+        trans = c.fetchall()
+        conn.close()
+        return trans
+    except Exception as e:
+        st.error(f"লেনদেন লোড এরর: {e}")
+        return []
 
 def get_all_members():
     conn = sqlite3.connect('somiti.db')
@@ -257,8 +280,20 @@ def get_bangla_month():
 def get_app_url():
     return "https://oiorganization2024.streamlit.app"
 
+def get_current_month_collection():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        current_month = datetime.now().strftime("%Y-%m")
+        c.execute("SELECT SUM(amount) FROM transactions WHERE month = ?", (current_month,))
+        total = c.fetchone()[0] or 0
+        conn.close()
+        return total
+    except:
+        return 0
+
 # ============================================
-# UI স্টাইল (ডার্ক থিম)
+# UI স্টাইল
 # ============================================
 def apply_dark_theme():
     st.markdown("""
@@ -273,7 +308,6 @@ def apply_dark_theme():
         border-radius: 15px;
         margin-bottom: 20px;
         text-align: center;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.5);
     }
     .somiti-header h1 {
         color: white;
@@ -288,7 +322,6 @@ def apply_dark_theme():
         border-radius: 15px;
         text-align: center;
         margin-bottom: 20px;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.5);
     }
     .total-box h2 {
         color: white;
@@ -303,13 +336,6 @@ def apply_dark_theme():
         border-radius: 15px;
         text-align: center;
         margin-bottom: 20px;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.5);
-    }
-    .cash-box h2 {
-        color: white;
-        font-size: 28px;
-        font-weight: 800;
-        margin: 0;
     }
     
     .member-card {
@@ -320,19 +346,6 @@ def apply_dark_theme():
         border: 1px solid #30363d;
     }
     
-    .copy-btn {
-        background: #238636;
-        color: white;
-        border: none;
-        padding: 5px 10px;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 12px;
-    }
-    .copy-btn:hover {
-        background: #2ea043;
-    }
-    
     .stButton > button {
         background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
         color: white;
@@ -341,7 +354,6 @@ def apply_dark_theme():
         border-radius: 8px;
         padding: 8px 16px;
         width: 100%;
-        font-size: 14px;
     }
     
     section[data-testid="stSidebar"] {
@@ -352,7 +364,7 @@ def apply_dark_theme():
         color: #c9d1d9 !important;
     }
     
-    p, h1, h2, h3, h4, h5, h6, li, .stMarkdown {
+    p, h1, h2, h3, h4, h5, h6, .stMarkdown {
         color: #c9d1d9 !important;
     }
     
@@ -414,34 +426,60 @@ def show_admin_header():
         </div>
         """, unsafe_allow_html=True)
 
-def copy_to_clipboard_js(text, element_id):
-    """জাভাস্ক্রিপ্ট দিয়ে ক্লিপবোর্ডে কপি করা"""
-    js_code = f"""
-    <script>
-    function copyToClipboard_{element_id}() {{
-        navigator.clipboard.writeText("{text}").then(function() {{
-            document.getElementById("{element_id}_msg").innerHTML = "✅ কপি হয়েছে!";
-            setTimeout(function() {{
-                document.getElementById("{element_id}_msg").innerHTML = "";
-            }}, 2000);
-        }});
-    }}
-    </script>
-    <button onclick="copyToClipboard_{element_id}()" class="copy-btn">📋 কপি</button>
-    <span id="{element_id}_msg" style="color: #3fb950; margin-left: 10px;"></span>
-    """
-    return js_code
-
 # ============================================
-# সেশন স্টেট
+# পাবলিক ভিউ (লগইন ছাড়া)
 # ============================================
-def init_session():
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    if 'user_type' not in st.session_state:
-        st.session_state.user_type = None
-    if 'member_id' not in st.session_state:
-        st.session_state.member_id = None
+def public_member_view(member_id):
+    """লগইন ছাড়া সদস্যের তথ্য দেখা"""
+    apply_dark_theme()
+    
+    member = get_member_by_id(member_id)
+    
+    if not member:
+        st.error("❌ সদস্য পাওয়া যায়নি")
+        return
+    
+    member_id, name, phone, password, telegram_id, total_savings, monthly_savings, join_date, status = member
+    
+    st.markdown(f"""
+    <div class="somiti-header">
+        <h1>🌾 {SOMITI_NAME} 🌾</h1>
+        <p>সদস্য তথ্য</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("👤 নাম", name)
+    with col2:
+        st.metric("🆔 আইডি", member_id)
+    with col3:
+        st.metric("📱 মোবাইল", phone)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("💰 মোট জমা", f"{total_savings:,.0f} টাকা")
+    with col2:
+        st.metric("📅 মাসিক কিস্তি", f"{monthly_savings:,.0f} টাকা")
+    
+    st.markdown("---")
+    st.markdown("### 📋 লেনদেন ইতিহাস")
+    
+    transactions = get_member_transactions(member_id)
+    
+    if transactions:
+        data = []
+        for t in transactions:
+            data.append({
+                "তারিখ": t[1],
+                "টাকা": f"{t[2]:,.0f}",
+                "মাস": t[3],
+                "লেট ফি": f"{t[4]:,.0f}" if t[4] else "0"
+            })
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("কোনো লেনদেন নেই")
 
 # ============================================
 # লগইন পেজ
@@ -453,10 +491,10 @@ def login_page():
     with st.container():
         st.markdown("### 🔐 লগইন")
         
-        phone = st.text_input("📱 মোবাইল নম্বর", placeholder="017XXXXXXXX", key="login_phone")
-        password = st.text_input("🔑 পাসওয়ার্ড", type="password", key="login_pass")
+        phone = st.text_input("📱 মোবাইল নম্বর", placeholder="017XXXXXXXX")
+        password = st.text_input("🔑 পাসওয়ার্ড", type="password")
         
-        if st.button("প্রবেশ করুন", key="login_btn"):
+        if st.button("প্রবেশ করুন", use_container_width=True):
             if phone == ADMIN_MOBILE and password == ADMIN_PASSWORD:
                 st.session_state.logged_in = True
                 st.session_state.user_type = 'admin'
@@ -481,10 +519,10 @@ def login_page():
                     else:
                         st.error("❌ ভুল মোবাইল বা পাসওয়ার্ড")
                 except Exception as e:
-                    st.error(f"❌ ডাটাবেজ এরর: {e}")
+                    st.error(f"❌ এরর: {e}")
         
         st.markdown("---")
-        st.caption(f"পাসওয়ার্ড ভুলে গেলে: {ADMIN_MOBILE}")
+        st.caption(f"সাহায্য: {ADMIN_MOBILE}")
 
 # ============================================
 # এডমিন প্যানেল
@@ -498,28 +536,35 @@ def admin_panel():
         st.caption(f"👑 {ADMIN_MOBILE}")
         
         # টেলিগ্রাম স্ট্যাটাস
-        bot_ok, bot_name = test_telegram_connection()
-        if bot_ok:
-            st.success(f"✅ বট এক্টিভ: {bot_name}")
+        bot = get_bot_info()
+        chat = get_chat_info()
+        
+        if bot:
+            st.success(f"✅ বট: @{bot.get('username', 'N/A')}")
         else:
             st.error("❌ বট কানেক্টেড নয়")
+        
+        if chat:
+            st.success(f"✅ চ্যাট: {chat.get('title', 'N/A')}")
+        else:
+            st.error("❌ চ্যাট পাওয়া যায়নি")
         
         menu = st.radio(
             "নির্বাচন করুন",
             ["🏠 ড্যাশবোর্ড", "➕ নতুন সদস্য", "✏️ সদস্য ব্যবস্থাপনা", "💵 টাকা জমা", 
-             "💰 লেনদেন ব্যবস্থাপনা", "🔗 সদস্য লিংক", "💸 খরচ", "📊 রিপোর্ট", 
+             "💰 লেনদেন", "🔗 লিংক", "💸 খরচ", "📊 রিপোর্ট", 
              "📱 SMS টেস্ট", "🎲 লটারি", "🚪 লগআউট"],
             label_visibility="collapsed"
         )
     
-    if menu == "🚪 লগআউট":
+    if menu == "🚪 লগআউត":
         for key in ['logged_in', 'user_type', 'member_id']:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
     
     elif menu == "🏠 ড্যাশবোর্ড":
-        st.markdown("### 🏠 এডমিন ড্যাশবোর্ড")
+        st.markdown("### 🏠 ড্যাশবোর্ড")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -530,16 +575,14 @@ def admin_panel():
             total_members = c.fetchone()[0]
             conn.close()
             
-            col1.metric("👥 মোট সদস্য", f"{total_members} জন")
-            col2.metric("💰 মোট জমা", f"{get_total_savings():,.0f} টাকা")
-            col3.metric("📅 এই মাসের জমা", f"{get_current_month_collection():,.0f} টাকা")
-            col4.metric("⚠️ বকেয়াদার", f"{len(get_unpaid_members())} জন")
+            col1.metric("👥 সদস্য", f"{total_members} জন")
+            col2.metric("💰 জমা", f"{get_total_savings():,.0f} টাকা")
+            col3.metric("📅 এই মাস", f"{get_current_month_collection():,.0f} টাকা")
+            col4.metric("⚠️ বকেয়া", f"{len(get_unpaid_members())} জন")
         except:
             pass
         
         st.markdown("---")
-        
-        # SMS কন্ট্রোল
         st.subheader("📢 SMS কন্ট্রোল")
         
         col1, col2 = st.columns(2)
@@ -550,349 +593,206 @@ def admin_panel():
                 year = datetime.now().year
                 msg = f"""📢 {SOMITI_NAME} - মাসিক কিস্তি রিমাইন্ডার
 
-তারিখ: ১ {month_name} {year}
+১ {month_name} {year}
 
 সকল সদস্যদের অনুরোধ:
-অনুগ্রহ করে আগামী ১০ {month_name} {year} এর মধ্যে মাসিক কিস্তি পরিশোধ করুন।
-
-ধন্যবাদ! 🙏"""
+১০ {month_name} এর মধ্যে কিস্তি পরিশোধ করুন। 🙏"""
                 if send_channel_message(msg):
-                    st.success("✅ রিমাইন্ডার পাঠানো হয়েছে!")
+                    st.success("✅ পাঠানো হয়েছে!")
                 else:
-                    st.error("❌ পাঠানো যায়নি। চ্যানেল আইডি চেক করুন।")
+                    st.error("❌ চ্যাট আইডি চেক করুন")
         
         with col2:
-            if st.button("⚠️ ১০ তারিখ বকেয়া রিমাইন্ডার", use_container_width=True, type="primary"):
+            if st.button("⚠️ ১০ তারিখ রিমাইন্ডার", use_container_width=True, type="primary"):
                 unpaid = get_unpaid_members()
                 if unpaid:
                     month_name = get_bangla_month()
                     msg = f"""⚠️ {SOMITI_NAME} - বকেয়া রিমাইন্ডার
 
-বকেয়াদার তালিকা ({month_name}):"""
+{month_name} মাসের বকেয়াদার:"""
                     for m in unpaid[:10]:
                         msg += f"\n• {m[1]} ({m[0]}) - {m[3]:,.0f} টাকা"
                     if len(unpaid) > 10:
-                        msg += f"\n... এবং আরও {len(unpaid) - 10} জন"
-                    msg += "\n\n🙏 দয়া করে আজই পরিশোধ করুন!"
+                        msg += f"\n... আরও {len(unpaid) - 10} জন"
+                    msg += "\n\n🙏 আজই পরিশোধ করুন!"
                     
                     if send_channel_message(msg):
-                        st.success(f"✅ পাঠানো হয়েছে!")
+                        st.success("✅ পাঠানো হয়েছে!")
                     else:
                         st.error("❌ পাঠানো যায়নি")
                 else:
                     st.success("🎉 সবাই পরিশোধ করেছেন!")
     
     elif menu == "➕ নতুন সদস্য":
-        st.markdown("### ➕ নতুন সদস্য নিবন্ধন")
+        st.markdown("### ➕ নতুন সদস্য")
         
-        with st.form("new_member_form"):
-            name = st.text_input("নাম *")
-            phone = st.text_input("মোবাইল নম্বর *", placeholder="017XXXXXXXX")
-            telegram_id = st.text_input("টেলিগ্রাম চ্যাট আইডি (ঐচ্ছিক)")
-            monthly = st.number_input("মাসিক কিস্তি (টাকা)", value=500, step=50)
-            
-            submitted = st.form_submit_button("✅ সদস্য যোগ করুন", type="primary")
-            
-            if submitted:
-                if not name or not phone:
-                    st.error("❌ নাম ও মোবাইল আবশ্যক")
-                elif phone == ADMIN_MOBILE:
-                    st.error("❌ এটি এডমিনের মোবাইল")
-                else:
-                    try:
-                        member_id = generate_member_id()
-                        password = generate_password()
-                        join_date = datetime.now().strftime("%Y-%m-%d")
-                        
-                        conn = sqlite3.connect('somiti.db')
-                        c = conn.cursor()
-                        c.execute("""
-                            INSERT INTO members (id, name, phone, password, telegram_id, monthly_savings, join_date)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (member_id, name, phone, password, telegram_id, monthly, join_date))
-                        conn.commit()
-                        conn.close()
-                        
-                        # চ্যানেলে স্বাগতম মেসেজ
-                        welcome = f"""🎉 {SOMITI_NAME} - নতুন সদস্য
+        name = st.text_input("নাম *")
+        phone = st.text_input("মোবাইল *", placeholder="017XXXXXXXX")
+        telegram_id = st.text_input("টেলিগ্রাম আইডি (ঐচ্ছিক)")
+        monthly = st.number_input("মাসিক কিস্তি", value=500, step=50)
+        
+        if st.button("✅ সদস্য যোগ করুন", type="primary", use_container_width=True):
+            if not name or not phone:
+                st.error("❌ নাম ও মোবাইল আবশ্যক")
+            else:
+                try:
+                    member_id = generate_member_id()
+                    password = generate_password()
+                    join_date = datetime.now().strftime("%Y-%m-%d")
+                    
+                    conn = sqlite3.connect('somiti.db')
+                    c = conn.cursor()
+                    c.execute("""
+                        INSERT INTO members (id, name, phone, password, telegram_id, monthly_savings, join_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (member_id, name, phone, password, telegram_id, monthly, join_date))
+                    conn.commit()
+                    conn.close()
+                    
+                    welcome = f"""🎉 {SOMITI_NAME} - নতুন সদস্য
 
-{name} ({member_id}) সমিতিতে যোগদান করেছেন!
-মাসিক কিস্তি: {monthly} টাকা
-
-সবাই স্বাগতম জানান! 🎊"""
-                        send_channel_message(welcome)
-                        
-                        st.success(f"✅ সদস্য তৈরি হয়েছে!")
-                        st.info(f"আইডি: {member_id} | পাসওয়ার্ড: {password}")
-                        st.balloons()
-                        
-                    except sqlite3.IntegrityError:
-                        st.error("❌ এই মোবাইল নম্বর ইতিমধ্যে নিবন্ধিত")
-    
-    elif menu == "✏️ সদস্য ব্যবস্থাপনা":
-        st.markdown("### ✏️ সদস্য ব্যবস্থাপনা")
-        
-        members = get_all_members()
-        
-        if members:
-            for m in members:
-                member_id, name, phone, password, telegram_id, status, monthly, savings = m
-                monthly = float(monthly) if monthly else 500.0
-                savings = float(savings) if savings else 0.0
-                
-                with st.expander(f"👤 {name} - {member_id} | 📱 {phone}"):
-                    col1, col2, col3, col4 = st.columns(4)
+{name} ({member_id}) যোগদান করেছেন!
+মাসিক কিস্তি: {monthly} টাকা"""
+                    send_channel_message(welcome)
                     
-                    with col1:
-                        if st.button("📝 এডিট", key=f"edit_{member_id}"):
-                            st.session_state[f"show_edit_{member_id}"] = True
-                    with col2:
-                        if st.button("🔐 পাসওয়ার্ড", key=f"pass_{member_id}"):
-                            st.session_state[f"show_pass_{member_id}"] = True
-                    with col3:
-                        status_text = "নিষ্ক্রিয়" if status == 'active' else "সক্রিয়"
-                        if st.button(f"🔄 {status_text} করুন", key=f"stat_{member_id}"):
-                            new_status = 'inactive' if status == 'active' else 'active'
-                            conn = sqlite3.connect('somiti.db')
-                            c = conn.cursor()
-                            c.execute("UPDATE members SET status=? WHERE id=?", (new_status, member_id))
-                            conn.commit()
-                            conn.close()
-                            st.rerun()
-                    with col4:
-                        if st.button("🗑️ ডিলিট", key=f"del_{member_id}"):
-                            st.session_state[f"show_del_{member_id}"] = True
+                    st.success(f"✅ সদস্য তৈরি!")
+                    st.info(f"আইডি: {member_id} | পাস: {password}")
+                    st.balloons()
                     
-                    # এডিট ফর্ম
-                    if st.session_state.get(f"show_edit_{member_id}"):
-                        with st.form(f"edit_form_{member_id}"):
-                            new_name = st.text_input("নাম", value=name)
-                            new_tel = st.text_input("টেলিগ্রাম আইডি", value=telegram_id or "")
-                            new_mon = st.number_input("মাসিক কিস্তি", value=monthly, step=50.0)
-                            
-                            if st.form_submit_button("💾 সেভ", type="primary"):
-                                conn = sqlite3.connect('somiti.db')
-                                c = conn.cursor()
-                                c.execute("UPDATE members SET name=?, telegram_id=?, monthly_savings=? WHERE id=?", 
-                                         (new_name, new_tel, new_mon, member_id))
-                                conn.commit()
-                                conn.close()
-                                st.success("✅ আপডেট হয়েছে!")
-                                del st.session_state[f"show_edit_{member_id}"]
-                                st.rerun()
-                    
-                    # পাসওয়ার্ড রিসেট
-                    if st.session_state.get(f"show_pass_{member_id}"):
-                        if st.button("✅ নতুন পাসওয়ার্ড জেনারেট", key=f"gen_pass_{member_id}"):
-                            new_pass = generate_password()
-                            conn = sqlite3.connect('somiti.db')
-                            c = conn.cursor()
-                            c.execute("UPDATE members SET password=? WHERE id=?", (new_pass, member_id))
-                            conn.commit()
-                            conn.close()
-                            st.success(f"✅ নতুন পাসওয়ার্ড: {new_pass}")
-                            del st.session_state[f"show_pass_{member_id}"]
-                    
-                    # ডিলিট
-                    if st.session_state.get(f"show_del_{member_id}"):
-                        if st.button("✅ নিশ্চিত ডিলিট", key=f"confirm_del_{member_id}"):
-                            conn = sqlite3.connect('somiti.db')
-                            c = conn.cursor()
-                            c.execute("DELETE FROM transactions WHERE member_id=?", (member_id,))
-                            c.execute("DELETE FROM members WHERE id=?", (member_id,))
-                            conn.commit()
-                            conn.close()
-                            st.success("✅ ডিলিট হয়েছে!")
-                            del st.session_state[f"show_del_{member_id}"]
-                            st.rerun()
-        else:
-            st.info("কোনো সদস্য নেই")
+                except sqlite3.IntegrityError:
+                    st.error("❌ এই মোবাইল ইতিমধ্যে নিবন্ধিত")
     
     elif menu == "💵 টাকা জমা":
-        st.markdown("### 💵 সদস্যের টাকা জমা")
+        st.markdown("### 💵 টাকা জমা")
         
-        paid_members = get_paid_members()
-        unpaid_members = get_unpaid_members()
+        paid = get_paid_members()
+        unpaid = get_unpaid_members()
         
         col1, col2 = st.columns(2)
         
-        # জমা দিয়েছে - শুধু দেখা যাবে
         with col1:
             st.markdown("#### ✅ জমা দিয়েছে")
-            
-            if paid_members:
-                for m in paid_members:
-                    member_id, name, phone, monthly, savings = m
+            if paid:
+                for m in paid:
                     st.markdown(f"""
                     <div class="member-card">
-                        <strong>{name}</strong> ({member_id})<br>
-                        <small>📱 {phone} | 💰 জমা: {savings:,.0f} টাকা</small>
+                        <strong>{m[1]}</strong> ({m[0]})<br>
+                        <small>💰 {m[4]:,.0f} টাকা</small>
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.info("কেউ এখনো জমা দেয়নি")
+                st.info("কেউ জমা দেয়নি")
         
-        # জমা দেয়নি - টাকা জমা নেওয়ার অপশন
         with col2:
             st.markdown("#### ❌ জমা দেয়নি")
-            
-            if unpaid_members:
-                for m in unpaid_members:
-                    member_id, name, phone, monthly, savings = m
-                    
-                    with st.expander(f"❌ {name} ({member_id})"):
-                        st.write(f"📱 {phone}")
-                        st.write(f"💰 বর্তমান জমা: {savings:,.0f} টাকা")
-                        st.write(f"📅 মাসিক কিস্তি: {monthly:,.0f} টাকা")
+            if unpaid:
+                for m in unpaid:
+                    with st.expander(f"❌ {m[1]} ({m[0]})"):
+                        st.write(f"📱 {m[2]}")
+                        st.write(f"💰 জমা: {m[4]:,.0f} টাকা")
+                        st.write(f"📅 কিস্তি: {m[3]:,.0f} টাকা")
                         
-                        with st.form(f"deposit_{member_id}"):
-                            # তারিখ সিলেক্ট
-                            deposit_date = st.date_input("জমার তারিখ", value=datetime.now())
+                        deposit_date = st.date_input("তারিখ", value=datetime.now(), key=f"date_{m[0]}")
+                        months_list = [(datetime.now() - timedelta(days=30*i)).strftime("%Y-%m") for i in range(12)]
+                        selected_month = st.selectbox("মাস", months_list, key=f"month_{m[0]}")
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            months_count = st.number_input("কত মাস", value=1, min_value=1, max_value=12, key=f"count_{m[0]}")
+                        with col_b:
+                            late_fee = st.number_input("লেট ফি", value=0.0, step=10.0, key=f"fee_{m[0]}")
+                        
+                        total = m[3] * months_count + late_fee
+                        st.write(f"**মোট: {total:,.0f} টাকা**")
+                        
+                        if st.button("✅ জমা নিন", key=f"dep_{m[0]}", type="primary"):
+                            today = deposit_date.strftime("%Y-%m-%d")
                             
-                            # মাস সিলেক্ট
-                            months = []
-                            for i in range(12):
-                                d = datetime.now() - timedelta(days=30*i)
-                                months.append(d.strftime("%Y-%m"))
-                            selected_month = st.selectbox("কিস্তির মাস", months)
+                            conn = sqlite3.connect('somiti.db')
+                            c = conn.cursor()
                             
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                months_count = st.number_input("কত মাস", value=1, min_value=1, max_value=12)
-                            with col_b:
-                                late_fee = st.number_input("লেট ফি", value=0.0, step=10.0)
+                            for i in range(months_count):
+                                m_date = (datetime.strptime(selected_month, "%Y-%m") + timedelta(days=30*i)).strftime("%Y-%m")
+                                c.execute("""
+                                    INSERT INTO transactions (member_id, amount, transaction_type, month, date, late_fee)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                """, (m[0], m[3], 'deposit', m_date, today, late_fee if i == 0 else 0))
                             
-                            total = monthly * months_count + late_fee
-                            st.write(f"**মোট জমা: {total:,.0f} টাকা**")
+                            c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", (total, m[0]))
+                            conn.commit()
+                            conn.close()
                             
-                            note = st.text_input("নোট (ঐচ্ছিক)")
-                            
-                            if st.form_submit_button("✅ জমা নিন", type="primary"):
-                                today = deposit_date.strftime("%Y-%m-%d")
-                                
-                                conn = sqlite3.connect('somiti.db')
-                                c = conn.cursor()
-                                
-                                for i in range(months_count):
-                                    m_date = (datetime.strptime(selected_month, "%Y-%m") + timedelta(days=30*i)).strftime("%Y-%m")
-                                    c.execute("""
-                                        INSERT INTO transactions (member_id, amount, transaction_type, month, date, note, late_fee)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    """, (member_id, monthly, 'deposit', m_date, today, note, late_fee if i == 0 else 0))
-                                
-                                c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", 
-                                         (total, member_id))
-                                conn.commit()
-                                conn.close()
-                                
-                                # চ্যানেলে মেসেজ
-                                channel_msg = f"""✅ পেমেন্ট সফল - {SOMITI_NAME}
+                            msg = f"""✅ পেমেন্ট সফল - {SOMITI_NAME}
 
-{name} ({member_id})
-জমা: {total:,.0f} টাকা
-তারিখ: {today}"""
-                                send_channel_message(channel_msg)
-                                
-                                st.success(f"✅ {total:,.0f} টাকা জমা হয়েছে!")
-                                st.rerun()
+{m[1]} ({m[0]})
+জমা: {total:,.0f} টাকা"""
+                            send_channel_message(msg)
+                            
+                            st.success(f"✅ {total:,.0f} টাকা জমা হয়েছে!")
+                            st.rerun()
             else:
                 st.success("🎉 সবাই জমা দিয়েছেন!")
     
-    elif menu == "💰 লেনদেন ব্যবস্থাপনা":
+    elif menu == "💰 লেনদেন":
         st.markdown("### 💰 লেনদেন ব্যবস্থাপনা")
         
         members = get_all_members()
         
         if members:
-            # সদস্য সিলেক্ট
-            member_options = {f"{m[1]} ({m[0]})": m[0] for m in members}
-            selected = st.selectbox("সদস্য নির্বাচন করুন", list(member_options.keys()))
+            options = {f"{m[1]} ({m[0]})": m[0] for m in members}
+            selected = st.selectbox("সদস্য নির্বাচন", list(options.keys()))
             
             if selected:
-                member_id = member_options[selected]
+                member_id = options[selected]
                 member = get_member_by_id(member_id)
                 
                 if member:
-                    st.success(f"👤 {member[1]} | 💰 মোট জমা: {member[6]:,.0f} টাকা")
+                    st.success(f"👤 {member[1]} | 💰 {member[6]:,.0f} টাকা")
                     
-                    # লেনদেন ইতিহাস
                     transactions = get_member_transactions(member_id)
                     
                     if transactions:
-                        st.markdown("#### 📋 লেনদেন ইতিহাস")
+                        st.markdown("#### লেনদেন ইতিহাস")
                         
-                        for trans in transactions:
-                            trans_id, date, amount, month, late_fee, note = trans
+                        for t in transactions:
+                            c1, c2, c3, c4, c5 = st.columns([2, 1.5, 1.5, 1, 1])
+                            c1.write(t[1])
+                            c2.write(f"{t[2]:,.0f} টাকা")
+                            c3.write(t[3])
                             
-                            col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 1.5, 1, 1, 1])
+                            if c4.button("✏️", key=f"e_{t[0]}"):
+                                st.session_state[f"edit_{t[0]}"] = True
                             
-                            col1.write(date)
-                            col2.write(f"{amount:,.0f} টাকা")
-                            col3.write(month)
-                            col4.write(f"{late_fee:,.0f}" if late_fee else "0")
-                            
-                            if col5.button("✏️", key=f"edit_{trans_id}"):
-                                st.session_state[f"edit_trans_{trans_id}"] = True
-                            
-                            if col6.button("🗑️", key=f"del_{trans_id}"):
+                            if c5.button("🗑️", key=f"d_{t[0]}"):
                                 conn = sqlite3.connect('somiti.db')
                                 c = conn.cursor()
-                                c.execute("UPDATE members SET total_savings = total_savings - ? WHERE id = ?", 
-                                         (amount, member_id))
-                                c.execute("DELETE FROM transactions WHERE id = ?", (trans_id,))
+                                c.execute("UPDATE members SET total_savings = total_savings - ? WHERE id = ?", (t[2], member_id))
+                                c.execute("DELETE FROM transactions WHERE id = ?", (t[0],))
                                 conn.commit()
                                 conn.close()
                                 st.success("✅ রিমুভ হয়েছে!")
                                 st.rerun()
                             
-                            # এডিট ফর্ম
-                            if st.session_state.get(f"edit_trans_{trans_id}"):
-                                with st.form(f"edit_{trans_id}"):
-                                    new_amt = st.number_input("টাকা", value=float(amount), step=50.0)
-                                    new_month = st.text_input("মাস", value=month)
-                                    
-                                    if st.form_submit_button("💾 সেভ"):
-                                        conn = sqlite3.connect('somiti.db')
-                                        c = conn.cursor()
-                                        diff = new_amt - amount
-                                        c.execute("UPDATE transactions SET amount=?, month=? WHERE id=?", 
-                                                 (new_amt, new_month, trans_id))
-                                        c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", 
-                                                 (diff, member_id))
-                                        conn.commit()
-                                        conn.close()
-                                        st.success("✅ আপডেট হয়েছে!")
-                                        del st.session_state[f"edit_trans_{trans_id}"]
-                                        st.rerun()
+                            if st.session_state.get(f"edit_{t[0]}"):
+                                new_amt = st.number_input("টাকা", value=float(t[2]), step=50.0, key=f"amt_{t[0]}")
+                                if st.button("💾 সেভ", key=f"save_{t[0]}"):
+                                    conn = sqlite3.connect('somiti.db')
+                                    c = conn.cursor()
+                                    diff = new_amt - t[2]
+                                    c.execute("UPDATE transactions SET amount = ? WHERE id = ?", (new_amt, t[0]))
+                                    c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", (diff, member_id))
+                                    conn.commit()
+                                    conn.close()
+                                    st.success("✅ আপডেট হয়েছে!")
+                                    del st.session_state[f"edit_{t[0]}"]
+                                    st.rerun()
                     else:
                         st.info("কোনো লেনদেন নেই")
-                    
-                    # নতুন লেনদেন যোগ
-                    st.markdown("#### ➕ নতুন লেনদেন যোগ")
-                    with st.form(f"add_{member_id}"):
-                        new_amt = st.number_input("টাকা", value=0.0, step=50.0)
-                        new_date = st.date_input("তারিখ", value=datetime.now())
-                        new_month = st.text_input("মাস (YYYY-MM)", value=datetime.now().strftime("%Y-%m"))
-                        
-                        if st.form_submit_button("✅ যোগ করুন"):
-                            if new_amt > 0:
-                                conn = sqlite3.connect('somiti.db')
-                                c = conn.cursor()
-                                c.execute("""
-                                    INSERT INTO transactions (member_id, amount, transaction_type, month, date)
-                                    VALUES (?, ?, ?, ?, ?)
-                                """, (member_id, new_amt, 'deposit', new_month, new_date.strftime("%Y-%m-%d")))
-                                c.execute("UPDATE members SET total_savings = total_savings + ? WHERE id = ?", 
-                                         (new_amt, member_id))
-                                conn.commit()
-                                conn.close()
-                                st.success("✅ যোগ হয়েছে!")
-                                st.rerun()
         else:
             st.info("কোনো সদস্য নেই")
     
-    elif menu == "🔗 সদস্য লিংক":
-        st.markdown("### 🔗 সদস্য লিংক ও পাসওয়ার্ড")
+    elif menu == "🔗 লিংক":
+        st.markdown("### 🔗 সদস্য লিংক")
         
         members = get_all_members()
         app_url = get_app_url()
@@ -901,185 +801,76 @@ def admin_panel():
             for m in members:
                 member_id, name, phone, password, telegram_id, status, monthly, savings = m
                 
-                member_link = f"{app_url}/?member={member_id}"
+                public_link = f"{app_url}/?member={member_id}"
                 
                 st.markdown(f"""
                 <div class="member-card">
                     <h4>👤 {name} ({member_id})</h4>
                     <p><strong>📱 মোবাইল:</strong> {phone}</p>
-                    <p><strong>🔗 লিংক:</strong> <code>{member_link}</code></p>
+                    <p><strong>🔗 পাবলিক লিংক:</strong><br>
+                    <code style="background:#0d1117; padding:5px; border-radius:5px;">{public_link}</code>
+                    </p>
                     <p><strong>🔑 পাসওয়ার্ড:</strong> <code>{password}</code></p>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                col1, col2, col3 = st.columns(3)
-                
+                col1, col2 = st.columns(2)
                 with col1:
-                    # ক্লিপবোর্ডে কপি করার জন্য জাভাস্ক্রিপ্ট
                     st.markdown(f"""
-                    <button onclick="navigator.clipboard.writeText('{member_link}')" 
-                            style="background:#238636; color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;">
+                    <button onclick="navigator.clipboard.writeText('{public_link}')" 
+                            style="background:#238636; color:white; border:none; padding:8px 16px; border-radius:5px; cursor:pointer; width:100%;">
                         📋 লিংক কপি
                     </button>
                     """, unsafe_allow_html=True)
-                
                 with col2:
                     st.markdown(f"""
                     <button onclick="navigator.clipboard.writeText('{password}')" 
-                            style="background:#238636; color:white; border:none; padding:5px 10px; border-radius:5px; cursor:pointer;">
+                            style="background:#238636; color:white; border:none; padding:8px 16px; border-radius:5px; cursor:pointer; width:100%;">
                         📋 পাসওয়ার্ড কপি
                     </button>
                     """, unsafe_allow_html=True)
                 
-                with col3:
-                    if telegram_id:
-                        if st.button("📱 টেলিগ্রামে পাঠান", key=f"send_{member_id}"):
-                            msg = f"""🔐 {SOMITI_NAME} - লগইন তথ্য
+                if telegram_id:
+                    if st.button("📱 টেলিগ্রামে পাঠান", key=f"send_{member_id}"):
+                        msg = f"""🔐 {SOMITI_NAME} - লগইন তথ্য
 
 প্রিয় {name},
-লিংক: {member_link}
+লিংক: {public_link}
 মোবাইল: {phone}
 পাসওয়ার্ড: {password}"""
-                            if send_personal_message(telegram_id, msg):
-                                st.success("✅ পাঠানো হয়েছে!")
-                            else:
-                                st.error("❌ পাঠানো যায়নি")
+                        if send_personal_message(telegram_id, msg):
+                            st.success("✅ পাঠানো হয়েছে!")
                 
                 st.markdown("---")
         else:
             st.info("কোনো সদস্য নেই")
     
-    elif menu == "💸 খরচ":
-        st.markdown("### 💸 খরচ ব্যবস্থাপনা")
-        
-        tab1, tab2 = st.tabs(["➕ নতুন খরচ", "📋 তালিকা"])
-        
-        with tab1:
-            with st.form("expense_form"):
-                desc = st.text_input("বিবরণ")
-                amt = st.number_input("টাকা", value=0.0, step=10.0)
-                cat = st.selectbox("ক্যাটাগরি", ["অফিস ভাড়া", "চা-নাস্তা", "স্টেশনারি", "পরিবহন", "অন্যান্য"])
-                
-                if st.form_submit_button("💾 সংরক্ষণ"):
-                    if desc and amt > 0:
-                        conn = sqlite3.connect('somiti.db')
-                        c = conn.cursor()
-                        c.execute("INSERT INTO expenses (description, amount, date, category) VALUES (?, ?, ?, ?)",
-                                 (desc, amt, datetime.now().strftime("%Y-%m-%d"), cat))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"✅ {amt:,.0f} টাকা যোগ হয়েছে!")
-                        st.rerun()
-        
-        with tab2:
-            try:
-                conn = sqlite3.connect('somiti.db')
-                c = conn.cursor()
-                c.execute("SELECT id, date, description, amount, category FROM expenses ORDER BY id DESC LIMIT 50")
-                expenses = c.fetchall()
-                conn.close()
-                
-                if expenses:
-                    for e in expenses:
-                        eid, date, desc, amt, cat = e
-                        c1, c2, c3, c4, c5 = st.columns([2, 2, 3, 2, 1])
-                        c1.write(date)
-                        c2.write(cat)
-                        c3.write(desc)
-                        c4.write(f"{amt:,.0f} টাকা")
-                        if c5.button("🗑️", key=f"del_exp_{eid}"):
-                            conn = sqlite3.connect('somiti.db')
-                            c = conn.cursor()
-                            c.execute("DELETE FROM expenses WHERE id=?", (eid,))
-                            conn.commit()
-                            conn.close()
-                            st.rerun()
-                    
-                    total = sum(e[3] for e in expenses)
-                    st.metric("📊 মোট খরচ", f"{total:,.0f} টাকা")
-            except:
-                pass
-    
-    elif menu == "📊 রিপোর্ট":
-        st.markdown("### 📊 রিপোর্ট")
-        
-        tab1, tab2 = st.tabs(["📈 মাসিক", "⚠️ বকেয়া"])
-        
-        with tab1:
-            try:
-                conn = sqlite3.connect('somiti.db')
-                c = conn.cursor()
-                c.execute("SELECT month, SUM(amount) FROM transactions GROUP BY month ORDER BY month DESC LIMIT 12")
-                data = c.fetchall()
-                conn.close()
-                
-                if data:
-                    df = pd.DataFrame(data, columns=["মাস", "জমা"])
-                    st.bar_chart(df.set_index("মাস"))
-                    st.dataframe(df, use_container_width=True, hide_index=True)
-            except:
-                pass
-        
-        with tab2:
-            unpaid = get_unpaid_members()
-            if unpaid:
-                df = pd.DataFrame(unpaid, columns=["আইডি", "নাম", "মোবাইল", "কিস্তি", "জমা"])
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                st.warning(f"⚠️ {len(unpaid)} জন বকেয়াদার")
-            else:
-                st.success("🎉 সবাই কিস্তি দিয়েছেন!")
-    
     elif menu == "📱 SMS টেস্ট":
         st.markdown("### 📱 SMS টেস্ট")
         
-        # বট স্ট্যাটাস
-        bot_ok, bot_name = test_telegram_connection()
-        if bot_ok:
-            st.success(f"✅ বট এক্টিভ: {bot_name}")
+        bot = get_bot_info()
+        chat = get_chat_info()
+        
+        if bot:
+            st.success(f"✅ বট: @{bot.get('username')}")
         else:
-            st.error("❌ বট কানেক্টেড নয়। টোকেন চেক করুন।")
+            st.error("❌ বট কানেক্টেড নয়")
+        
+        if chat:
+            st.success(f"✅ চ্যাট: {chat.get('title')} ({chat.get('id')})")
+        else:
+            st.error("❌ চ্যাট পাওয়া যায়নি - বটকে গ্রুপে এড করুন")
         
         st.info(f"চ্যানেল আইডি: {CHANNEL_CHAT_ID}")
         
-        test_msg = st.text_area("টেস্ট মেসেজ", value=f"🧪 টেস্ট মেসেজ - {SOMITI_NAME}")
+        test_msg = st.text_area("টেস্ট মেসেজ", value=f"🧪 টেস্ট - {SOMITI_NAME}")
         
         if st.button("📨 টেস্ট পাঠান", type="primary"):
             if send_channel_message(test_msg):
-                st.success("✅ মেসেজ পাঠানো হয়েছে!")
+                st.success("✅ পাঠানো হয়েছে!")
                 st.balloons()
             else:
-                st.error("❌ মেসেজ পাঠানো যায়নি। চ্যানেল আইডি সঠিক কিনা চেক করুন।")
-                st.info("চ্যানেল আইডি নেগেটিভ নম্বর দিয়ে শুরু হয় (যেমন: -100...)")
-    
-    elif menu == "🎲 লটারি":
-        st.markdown("### 🎲 লটারি")
-        
-        if st.button("🎲 বিজয়ী নির্বাচন", type="primary"):
-            w = pick_lottery_winner()
-            if w:
-                mid, name, phone, sav, tel = w
-                st.balloons()
-                st.success(f"🎉 {name} [{mid}] বিজয়ী!")
-                
-                announce = f"""🎉 লটারি বিজয়ী - {SOMITI_NAME}
-
-অভিনন্দন! {name} ({mid})
-আজকের লাকি ড্র-তে বিজয়ী হয়েছেন! 🏆"""
-                send_channel_message(announce)
-            else:
-                st.error("❌ কোনো সক্রিয় সদস্য নেই")
-
-def get_current_month_collection():
-    try:
-        conn = sqlite3.connect('somiti.db')
-        c = conn.cursor()
-        current_month = datetime.now().strftime("%Y-%m")
-        c.execute("SELECT SUM(amount) FROM transactions WHERE month = ?", (current_month,))
-        total = c.fetchone()[0] or 0
-        conn.close()
-        return total
-    except:
-        return 0
+                st.error("❌ চ্যাট আইডি সঠিক নয়")
 
 # ============================================
 # সদস্য প্যানেল
@@ -1112,7 +903,7 @@ def member_panel():
             
             menu = st.radio("মেনু", ["📊 ড্যাশবোর্ড", "🔑 পাসওয়ার্ড", "🚪 লগআউট"], label_visibility="collapsed")
         
-        if menu == "🚪 লগআউট":
+        if menu == "🚪 লগআউត":
             for k in ['logged_in', 'user_type', 'member_id']:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -1125,19 +916,21 @@ def member_panel():
             c1.metric("💰 জমা", f"{savings:,.0f} টাকা")
             c2.metric("📅 কিস্তি", f"{monthly:,.0f} টাকা")
             
-            # লেনদেন ইতিহাস
             st.markdown("---")
             st.markdown("#### 📋 লেনদেন ইতিহাস")
             
             trans = get_member_transactions(mid)
             
             if trans:
-                df = pd.DataFrame(trans, columns=["ID", "তারিখ", "টাকা", "মাস", "লেট ফি", "নোট"])
-                st.dataframe(df[["তারিখ", "টাকা", "মাস"]], use_container_width=True, hide_index=True)
-                
-                out = BytesIO()
-                df.to_excel(out, index=False)
-                st.download_button("📥 এক্সেল ডাউনলোড", out.getvalue(), f"{mid}_statement.xlsx")
+                data = []
+                for t in trans:
+                    data.append({
+                        "তারিখ": t[1],
+                        "টাকা": f"{t[2]:,.0f}",
+                        "মাস": t[3]
+                    })
+                df = pd.DataFrame(data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.info("কোনো লেনদেন নেই")
         
@@ -1172,7 +965,19 @@ def member_panel():
 # ============================================
 def main():
     init_database()
-    init_session()
+    
+    # পাবলিক ভিউ চেক
+    if member_view_id:
+        public_member_view(member_view_id)
+        return
+    
+    # সেশন স্টেট
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'user_type' not in st.session_state:
+        st.session_state.user_type = None
+    if 'member_id' not in st.session_state:
+        st.session_state.member_id = None
     
     if not st.session_state.logged_in:
         login_page()
