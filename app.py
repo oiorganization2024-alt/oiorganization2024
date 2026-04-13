@@ -194,6 +194,8 @@ def get_total_savings():
     if len(df) == 0:
         return 0.0
     active = df[df['status'] == 'active']
+    if len(active) == 0:
+        return 0.0
     return active['total_savings'].astype(float).sum()
 
 def get_total_expenses():
@@ -548,12 +550,11 @@ def admin_panel():
         monthly = st.number_input(f"{t('মাসিক কিস্তি', 'Monthly')} ({t('টাকা', 'Taka')})", value=500, step=50)
         if st.button(f"✅ {t('সদস্য যোগ করুন', 'Add Member')}", type="primary"):
             if name and phone:
+                password = generate_password()
                 member_id = add_member({
                     'name': name, 'phone': phone, 'email': email,
-                    'password': generate_password(), 'monthly_savings': monthly
+                    'password': password, 'monthly_savings': monthly
                 })
-                password = generate_password()
-                update_member(member_id, {'password': password})
                 st.success(f"✅ {t('সদস্য তৈরি', 'Member created')}!")
                 st.info(f"{t('আইডি', 'ID')}: {member_id} | {t('পাস', 'Pass')}: {password}")
                 st.balloons()
@@ -564,76 +565,76 @@ def admin_panel():
         st.markdown(f"### ✏️ {t('সদস্য ব্যবস্থাপনা', 'Member Management')}")
         members = get_all_members()
         if members:
-            # টেবিল আকারে দেখান
-            table_data = []
             for m in members:
-                table_data.append({
-                    t('আইডি', 'ID'): m['id'],
-                    t('নাম', 'Name'): m['name'],
-                    t('মোবাইল', 'Mobile'): m['phone'],
-                    t('কিস্তি', 'Monthly'): f"{float(m.get('monthly_savings', 500)):,.0f}",
-                    t('জমা', 'Savings'): f"{float(m.get('total_savings', 0)):,.0f}",
-                    t('স্ট্যাটাস', 'Status'): m.get('status', 'active')
-                })
-            df = pd.DataFrame(table_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            
-            st.markdown("---")
-            st.markdown(f"#### ✏️ {t('সদস্য এডিট/ডিলিট', 'Edit/Delete Member')}")
-            for m in members:
-                with st.expander(f"👤 {m['name']} ({m['id']})"):
+                member_id = m['id']
+                name = m['name']
+                phone = m['phone']
+                email = m.get('email', '')
+                password = m.get('password', '')
+                status = m.get('status', 'active')
+                monthly = float(m.get('monthly_savings', 500))
+                savings = float(m.get('total_savings', 0))
+                
+                with st.expander(f"👤 {name} - {member_id}"):
+                    st.write(f"📱 {phone} | 📧 {email or 'N/A'} | 💰 {savings:,.0f} {t('টাকা', 'Taka')}")
+                    
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        if st.button(f"📝 {t('এডিট', 'Edit')}", key=f"e_{m['id']}"):
-                            st.session_state[f"edit_{m['id']}"] = True
+                        if st.button(f"📝 {t('এডিট', 'Edit')}", key=f"e_{member_id}"):
+                            st.session_state[f"edit_{member_id}"] = True
                     with col2:
-                        if st.button(f"🔐 {t('পাসওয়ার্ড', 'Password')}", key=f"p_{m['id']}"):
-                            st.session_state[f"pass_{m['id']}"] = True
+                        if st.button(f"🔐 {t('পাসওয়ার্ড', 'Password')}", key=f"p_{member_id}"):
+                            st.session_state[f"pass_{member_id}"] = True
                     with col3:
-                        new_status = 'inactive' if m.get('status') == 'active' else 'active'
-                        btn_text = t('নিষ্ক্রিয়', 'Inactive') if m.get('status') == 'active' else t('সক্রিয়', 'Active')
-                        if st.button(f"🔄 {btn_text}", key=f"s_{m['id']}"):
-                            update_member(m['id'], {'status': new_status})
+                        new_status = 'inactive' if status == 'active' else 'active'
+                        btn_text = t('নিষ্ক্রিয়', 'Inactive') if status == 'active' else t('সক্রিয়', 'Active')
+                        if st.button(f"🔄 {btn_text}", key=f"s_{member_id}"):
+                            update_member(member_id, {'status': new_status})
                             st.rerun()
                     with col4:
-                        if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{m['id']}"):
-                            st.session_state[f"delete_{m['id']}"] = True
+                        if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{member_id}"):
+                            st.session_state[f"delete_{member_id}"] = True
                     
-                    if st.session_state.get(f"delete_{m['id']}"):
+                    # ডিলিট কনফার্মেশন
+                    if st.session_state.get(f"delete_{member_id}"):
                         st.warning(f"⚠️ {t('আপনি কি নিশ্চিত?', 'Are you sure?')}")
                         c1, c2 = st.columns(2)
                         with c1:
-                            if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"confirm_{m['id']}"):
-                                delete_member(m['id'])
+                            if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"confirm_{member_id}"):
+                                delete_member(member_id)
                                 st.success(f"✅ {t('ডিলিট', 'Deleted')}!")
-                                del st.session_state[f"delete_{m['id']}"]
+                                del st.session_state[f"delete_{member_id}"]
                                 st.rerun()
                         with c2:
-                            if st.button(f"❌ {t('না', 'No')}", key=f"cancel_{m['id']}"):
-                                del st.session_state[f"delete_{m['id']}"]
+                            if st.button(f"❌ {t('না', 'No')}", key=f"cancel_{member_id}"):
+                                del st.session_state[f"delete_{member_id}"]
                                 st.rerun()
                     
-                    if st.session_state.get(f"edit_{m['id']}"):
-                        with st.form(f"edit_{m['id']}"):
-                            new_name = st.text_input(t("নাম", "Name"), value=m['name'])
-                            new_phone = st.text_input(t("মোবাইল", "Mobile"), value=m['phone'])
-                            new_email = st.text_input(t("ইমেইল", "Email"), value=m.get('email', ''))
-                            new_mon = st.number_input(t("কিস্তি", "Monthly"), value=float(m.get('monthly_savings', 500)), step=50.0)
+                    # এডিট ফর্ম
+                    if st.session_state.get(f"edit_{member_id}"):
+                        with st.form(f"edit_{member_id}"):
+                            new_name = st.text_input(t("নাম", "Name"), value=name)
+                            new_phone = st.text_input(t("মোবাইল", "Mobile"), value=phone)
+                            new_email = st.text_input(t("ইমেইল", "Email"), value=email)
+                            new_mon = st.number_input(t("কিস্তি", "Monthly"), value=monthly, step=50.0)
                             if st.form_submit_button("💾"):
-                                update_member(m['id'], {
-                                    'name': new_name, 'phone': new_phone,
-                                    'email': new_email, 'monthly_savings': new_mon
+                                update_member(member_id, {
+                                    'name': new_name,
+                                    'phone': new_phone,
+                                    'email': new_email,
+                                    'monthly_savings': new_mon
                                 })
-                                st.success("✅")
-                                del st.session_state[f"edit_{m['id']}"]
+                                st.success("✅ আপডেট সম্পন্ন!")
+                                del st.session_state[f"edit_{member_id}"]
                                 st.rerun()
                     
-                    if st.session_state.get(f"pass_{m['id']}"):
-                        if st.button(f"✅ {t('নতুন পাসওয়ার্ড', 'New')}", key=f"gen_{m['id']}"):
+                    # পাসওয়ার্ড রিসেট
+                    if st.session_state.get(f"pass_{member_id}"):
+                        if st.button(f"✅ {t('নতুন পাসওয়ার্ড', 'New Password')}", key=f"gen_{member_id}"):
                             new_pass = generate_password()
-                            update_member(m['id'], {'password': new_pass})
-                            st.success(f"✅ {t('নতুন পাস', 'New')}: {new_pass}")
-                            del st.session_state[f"pass_{m['id']}"]
+                            update_member(member_id, {'password': new_pass})
+                            st.success(f"✅ {t('নতুন পাস', 'New Pass')}: {new_pass}")
+                            del st.session_state[f"pass_{member_id}"]
                             st.rerun()
         else:
             st.info(t("কোনো সদস্য নেই", "No members"))
@@ -665,15 +666,19 @@ def admin_panel():
                     savings_val = float(um.get('total_savings', 0))
                     monthly_val = float(um.get('monthly_savings', 500))
                     with st.expander(f"❌ {um['name']} ({um['id']})"):
-                        deposit_date = st.date_input(t("জমার তারিখ", "Date"), datetime.now(), key=f"date_{um['id']}")
+                        st.write(f"📱 {um['phone']} | 💰 {savings_val:,.0f} {t('টাকা', 'Taka')} | 📅 {t('কিস্তি', 'Monthly')}: {monthly_val:,.0f}")
+                        
+                        deposit_date = st.date_input(t("জমার তারিখ", "Deposit Date"), datetime.now(), key=f"date_{um['id']}")
                         day = deposit_date.day
                         month = deposit_date.month
                         year = deposit_date.year
+                        
                         c1, c2 = st.columns(2)
                         with c1:
                             months_count = st.number_input(t("কত মাস", "Months"), 1, 12, 1, key=f"count_{um['id']}")
                         with c2:
                             late_fee = st.number_input(t("লেট ফি", "Late Fee"), 0.0, step=10.0, key=f"fee_{um['id']}")
+                        
                         total = monthly_val * months_count + late_fee
                         
                         if st.button(f"✅ {t('জমা নিন', 'Deposit')}", key=f"dep_{um['id']}", type="primary"):
@@ -682,19 +687,33 @@ def admin_panel():
                             full_date_en = f"{day} {ENGLISH_MONTHS[month]} {year}"
                             date_iso = f"{year}-{month:02d}-{day:02d}"
                             
+                            # ১. ট্রানজেকশন এন্ট্রি
                             for i in range(int(months_count)):
                                 add_transaction({
-                                    'member_id': um['id'], 'amount': monthly_val, 'transaction_type': 'deposit',
-                                    'day': day, 'month': month, 'year': year,
-                                    'month_name': BANGLA_MONTHS[month], 'month_name_en': ENGLISH_MONTHS[month],
-                                    'full_date': full_date, 'full_date_en': full_date_en, 'date_iso': date_iso,
-                                    'late_fee': late_fee if i == 0 else 0, 'created_at': today_str
+                                    'member_id': um['id'],
+                                    'amount': monthly_val,
+                                    'transaction_type': 'deposit',
+                                    'day': day,
+                                    'month': month,
+                                    'year': year,
+                                    'month_name': BANGLA_MONTHS[month],
+                                    'month_name_en': ENGLISH_MONTHS[month],
+                                    'full_date': full_date,
+                                    'full_date_en': full_date_en,
+                                    'date_iso': date_iso,
+                                    'late_fee': late_fee if i == 0 else 0,
+                                    'created_at': today_str
                                 })
                             
-                            new_savings = savings_val + total
-                            update_member(um['id'], {'total_savings': new_savings})
+                            # ২. মেম্বারের ব্যালেন্স আপডেট
+                            df = load_df(MEMBERS_CSV, MEMBER_COLS)
+                            idx = df[df['id'] == um['id']].index
+                            if len(idx) > 0:
+                                current_savings = float(df.loc[idx[0], 'total_savings']) if pd.notna(df.loc[idx[0], 'total_savings']) else 0.0
+                                df.loc[idx[0], 'total_savings'] = current_savings + total
+                                save_df(df, MEMBERS_CSV)
                             
-                            st.success(f"✅ {total:,.0f} {t('টাকা জমা হয়েছে', 'deposited')}!")
+                            st.success(f"✅ {total:,.0f} {t('টাকা জমা হয়েছে', 'Taka deposited')}!")
                             st.balloons()
                             time.sleep(1)
                             st.rerun()
@@ -711,7 +730,8 @@ def admin_panel():
                 member_id = options[selected]
                 member = get_member_by_id(member_id)
                 if member:
-                    st.success(f"👤 {member['name']} | 💰 {float(member.get('total_savings', 0)):,.0f} {t('টাকা', 'Taka')}")
+                    savings_val = float(member.get('total_savings', 0))
+                    st.success(f"👤 {member['name']} | 💰 {savings_val:,.0f} {t('টাকা', 'Taka')}")
                     trans = get_member_transactions(member_id)
                     if trans:
                         table_data = []
@@ -744,8 +764,13 @@ def admin_panel():
                                 cy, cn = st.columns(2)
                                 with cy:
                                     if st.button("✅", key=f"yes_{tr['id']}"):
-                                        current_savings = float(member.get('total_savings', 0))
-                                        update_member(member_id, {'total_savings': current_savings - float(tr['amount'])})
+                                        # ব্যালেন্স আপডেট
+                                        df_mem = load_df(MEMBERS_CSV, MEMBER_COLS)
+                                        idx = df_mem[df_mem['id'] == member_id].index
+                                        if len(idx) > 0:
+                                            current = float(df_mem.loc[idx[0], 'total_savings']) if pd.notna(df_mem.loc[idx[0], 'total_savings']) else 0.0
+                                            df_mem.loc[idx[0], 'total_savings'] = current - float(tr['amount'])
+                                            save_df(df_mem, MEMBERS_CSV)
                                         delete_transaction(tr['id'])
                                         st.success("✅")
                                         del st.session_state[f"confirm_del_{tr['id']}"]
@@ -760,8 +785,13 @@ def admin_panel():
                                     new_amt = st.number_input(t("টাকা", "Amount"), value=float(tr['amount']), step=50.0)
                                     if st.form_submit_button("💾"):
                                         diff = new_amt - float(tr['amount'])
-                                        current_savings = float(member.get('total_savings', 0))
-                                        update_member(member_id, {'total_savings': current_savings + diff})
+                                        # ব্যালেন্স আপডেট
+                                        df_mem = load_df(MEMBERS_CSV, MEMBER_COLS)
+                                        idx = df_mem[df_mem['id'] == member_id].index
+                                        if len(idx) > 0:
+                                            current = float(df_mem.loc[idx[0], 'total_savings']) if pd.notna(df_mem.loc[idx[0], 'total_savings']) else 0.0
+                                            df_mem.loc[idx[0], 'total_savings'] = current + diff
+                                            save_df(df_mem, MEMBERS_CSV)
                                         update_transaction(tr['id'], {'amount': new_amt})
                                         st.success("✅")
                                         del st.session_state[f"edit_trans_{tr['id']}"]
