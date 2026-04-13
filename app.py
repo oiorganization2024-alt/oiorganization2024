@@ -13,8 +13,8 @@ from email.mime.multipart import MIMEMultipart
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 DB_PATH = "somiti.db"
-ADMIN_PHONE = "01700000000"
-ADMIN_PASSWORD = "admin123"
+ADMIN_PHONE = "01766222373"
+ADMIN_PASSWORD = "oio112024"
 
 BN_MONTHS = ["জানুয়ারি","ফেব্রুয়ারি","মার্চ","এপ্রিল","মে","জুন",
               "জুলাই","আগস্ট","সেপ্টেম্বর","অক্টোবর","নভেম্বর","ডিসেম্বর"]
