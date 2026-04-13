@@ -1,968 +1,1083 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import random
 import string
-import datetime
+from datetime import datetime, timedelta
+from io import BytesIO
 import os
 import shutil
 import time
-import hashlib
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import json
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-from reportlab.platypus import Table, TableStyle
 from reportlab.lib import colors
-import io
-import base64
-from contextlib import contextmanager
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-# ------------------------------
-# পৃষ্ঠা কনফিগারেশন
-# ------------------------------
-st.set_page_config(
-    page_title="ঐক্য উদ্যোগ সংস্থা",
-    page_icon="🤝",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ==================== কনফিগারেশন ====================
+ADMIN_MOBILE = "01766222373"
+ADMIN_PASSWORD = "oio112024"
+SOMITI_NAME = "ঐক্য উদ্যোগ সংস্থা"
+SOMITI_NAME_EN = "Oikko Uddog Songstha"
+SOMITI_START_DATE = "2026-04-12"
 
-# ------------------------------
-# কাস্টম CSS (ডার্ক থিম)
-# ------------------------------
-def apply_custom_css():
+# ইমেইল কনফিগ (শুধু টেস্টের জন্য)
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 465
+SENDER_EMAIL = "oiorganization2024@gmail.com"
+SENDER_PASSWORD = "hnhm ocix kyxv ioiz"
+
+st.set_page_config(page_title=SOMITI_NAME, page_icon="🌾", layout="wide")
+
+try:
+    query_params = st.query_params
+    member_login_id = query_params.get("member") if query_params else None
+except:
+    member_login_id = None
+
+if 'language' not in st.session_state:
+    st.session_state.language = 'bn'
+
+def t(bn_text, en_text):
+    return bn_text if st.session_state.language == 'bn' else en_text
+
+BANGLA_MONTHS = {
+    1: "জানুয়ারি", 2: "ফেব্রুয়ারি", 3: "মার্চ", 4: "এপ্রিল",
+    5: "মে", 6: "জুন", 7: "জুলাই", 8: "আগস্ট",
+    9: "সেপ্টেম্বর", 10: "অক্টোবর", 11: "নভেম্বর", 12: "ডিসেম্বর"
+}
+
+ENGLISH_MONTHS = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December"
+}
+
+# ==================== ফাইল পাথ (CSV) ====================
+DATA_DIR = "data"
+ARCHIVE_DIR = "archives"
+
+MEMBERS_CSV = f"{DATA_DIR}/members.csv"
+TRANSACTIONS_CSV = f"{DATA_DIR}/transactions.csv"
+EXPENSES_CSV = f"{DATA_DIR}/expenses.csv"
+WITHDRAWALS_CSV = f"{DATA_DIR}/withdrawals.csv"
+FUND_CSV = f"{DATA_DIR}/fund_transactions.csv"
+SETTINGS_JSON = f"{DATA_DIR}/settings.json"
+
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
+
+# কলাম ডেফিনেশন
+MEMBER_COLS = ['id', 'name', 'phone', 'email', 'password', 'total_savings', 'monthly_savings', 'join_date', 'status']
+TRANSACTION_COLS = ['id', 'member_id', 'amount', 'transaction_type', 'day', 'month', 'year',
+                    'month_name', 'month_name_en', 'full_date', 'full_date_en', 'date_iso', 'late_fee', 'created_at']
+EXPENSE_COLS = ['id', 'description', 'amount', 'date', 'category']
+WITHDRAWAL_COLS = ['id', 'date', 'amount', 'description', 'withdrawn_by', 'previous_balance', 'current_balance', 'created_at']
+FUND_COLS = ['id', 'type', 'amount', 'description', 'date', 'previous_balance', 'current_balance', 'created_at']
+
+# ==================== CSV হেল্পার ফাংশন ====================
+def load_df(file_path, columns):
+    if os.path.exists(file_path):
+        try:
+            return pd.read_csv(file_path, encoding='utf-8')
+        except:
+            return pd.DataFrame(columns=columns)
+    return pd.DataFrame(columns=columns)
+
+def save_df(df, file_path):
+    df.to_csv(file_path, index=False, encoding='utf-8')
+
+def get_next_id(file_path, columns):
+    df = load_df(file_path, columns)
+    if len(df) == 0:
+        return 1
+    return int(df['id'].max()) + 1
+
+def append_row(file_path, row_dict, columns):
+    df = load_df(file_path, columns)
+    new_row = pd.DataFrame([row_dict])
+    df = pd.concat([df, new_row], ignore_index=True)
+    save_df(df, file_path)
+
+def update_row(file_path, row_id, updates, columns):
+    df = load_df(file_path, columns)
+    idx = df[df['id'] == int(row_id)].index
+    if len(idx) > 0:
+        for k, v in updates.items():
+            df.loc[idx[0], k] = v
+        save_df(df, file_path)
+        return True
+    return False
+
+def delete_row(file_path, row_id, columns):
+    df = load_df(file_path, columns)
+    df = df[df['id'] != int(row_id)]
+    save_df(df, file_path)
+
+# ==================== সেটিংস ====================
+def load_settings():
+    if os.path.exists(SETTINGS_JSON):
+        with open(SETTINGS_JSON, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"start_date": SOMITI_START_DATE}
+
+def save_settings(settings):
+    with open(SETTINGS_JSON, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+# ==================== আর্কাইভ ====================
+def check_and_archive_old_data():
+    settings = load_settings()
+    start = datetime.strptime(settings['start_date'], "%Y-%m-%d")
+    if (datetime.now() - start).days / 365 >= 20:
+        archive_name = f"archive_{start.year}_{datetime.now().year}"
+        archive_path = f"{ARCHIVE_DIR}/{archive_name}"
+        os.makedirs(archive_path, exist_ok=True)
+        for f in [MEMBERS_CSV, TRANSACTIONS_CSV, EXPENSES_CSV, WITHDRAWALS_CSV, FUND_CSV]:
+            if os.path.exists(f):
+                shutil.copy(f, archive_path)
+        # ক্লিয়ার
+        for f, cols in [(MEMBERS_CSV, MEMBER_COLS), (TRANSACTIONS_CSV, TRANSACTION_COLS),
+                        (EXPENSES_CSV, EXPENSE_COLS), (WITHDRAWALS_CSV, WITHDRAWAL_COLS), (FUND_CSV, FUND_COLS)]:
+            pd.DataFrame(columns=cols).to_csv(f, index=False)
+        settings['start_date'] = datetime.now().strftime("%Y-%m-%d")
+        save_settings(settings)
+
+# ==================== ইমেইল টেস্ট ====================
+def send_test_email(to_email):
+    if not to_email or '@' not in str(to_email):
+        return False
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        msg = MIMEMultipart()
+        msg['From'] = f"{SOMITI_NAME} <{SENDER_EMAIL}>"
+        msg['To'] = to_email
+        msg['Subject'] = f"🧪 ইমেইল টেস্ট - {SOMITI_NAME}"
+        
+        html = f"""
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2>🌾 {SOMITI_NAME}</h2>
+            <p>✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
+            <hr>
+            <p style="color: #666; font-size: 12px;">{SOMITI_NAME_EN}</p>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html, 'html', 'utf-8'))
+        
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15)
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Email Error: {e}")
+        return False
+
+# ==================== ইউটিলিটি ফাংশন ====================
+def generate_member_id():
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    if len(df) == 0:
+        return "10001"
+    max_id = max([int(str(x)) for x in df['id'].tolist()])
+    return str(max_id + 1)
+
+def generate_password():
+    return ''.join(random.choices(string.digits, k=6))
+
+def get_total_savings():
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    if len(df) == 0:
+        return 0.0
+    active = df[df['status'] == 'active']
+    return active['total_savings'].astype(float).sum()
+
+def get_total_expenses():
+    df = load_df(EXPENSES_CSV, EXPENSE_COLS)
+    if len(df) == 0:
+        return 0.0
+    return df['amount'].astype(float).sum()
+
+def get_total_withdrawals():
+    df = load_df(WITHDRAWALS_CSV, WITHDRAWAL_COLS)
+    if len(df) == 0:
+        return 0.0
+    return df['amount'].astype(float).sum()
+
+def get_fund_balance():
+    df = load_df(FUND_CSV, FUND_COLS)
+    if len(df) == 0:
+        return 0.0
+    deposits = df[df['type'] == 'deposit']['amount'].astype(float).sum()
+    withdrawals = df[df['type'] == 'withdrawal']['amount'].astype(float).sum()
+    return deposits - withdrawals
+
+def get_cash_balance():
+    return get_total_savings() + get_fund_balance() - get_total_expenses() - get_total_withdrawals()
+
+def get_paid_members():
+    current = datetime.now()
+    trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    if len(trans_df) == 0 or len(mem_df) == 0:
+        return []
+    paid_ids = trans_df[(trans_df['month'] == current.month) & (trans_df['year'] == current.year)]['member_id'].unique()
+    paid = mem_df[mem_df['id'].isin(paid_ids) & (mem_df['status'] == 'active')]
+    return paid.to_dict('records')
+
+def get_unpaid_members():
+    current = datetime.now()
+    trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    active = mem_df[mem_df['status'] == 'active']
+    if len(trans_df) == 0:
+        return active.to_dict('records')
+    paid_ids = trans_df[(trans_df['month'] == current.month) & (trans_df['year'] == current.year)]['member_id'].unique()
+    unpaid = active[~active['id'].isin(paid_ids)]
+    return unpaid.to_dict('records')
+
+def get_member_transactions(member_id):
+    df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    if len(df) == 0:
+        return []
+    mem_df = df[df['member_id'] == str(member_id)]
+    mem_df = mem_df.sort_values(['year', 'month', 'day'], ascending=[False, False, False])
+    return mem_df.to_dict('records')
+
+def get_all_members():
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    return df.to_dict('records')
+
+def get_member_by_id(member_id):
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    match = df[df['id'] == str(member_id)]
+    if len(match) > 0:
+        return match.iloc[0].to_dict()
+    return None
+
+def add_member(data):
+    data['id'] = generate_member_id()
+    data['total_savings'] = data.get('total_savings', 0)
+    data['monthly_savings'] = data.get('monthly_savings', 500)
+    data['join_date'] = datetime.now().strftime("%Y-%m-%d")
+    data['status'] = 'active'
+    append_row(MEMBERS_CSV, data, MEMBER_COLS)
+    return data['id']
+
+def update_member(member_id, updates):
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    idx = df[df['id'] == str(member_id)].index
+    if len(idx) > 0:
+        for k, v in updates.items():
+            df.loc[idx[0], k] = v
+        save_df(df, MEMBERS_CSV)
+        return True
+    return False
+
+def delete_member(member_id):
+    # ট্রানজেকশন ডিলিট
+    trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    trans_df = trans_df[trans_df['member_id'] != str(member_id)]
+    save_df(trans_df, TRANSACTIONS_CSV)
+    # মেম্বার ডিলিট
+    mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    mem_df = mem_df[mem_df['id'] != str(member_id)]
+    save_df(mem_df, MEMBERS_CSV)
+
+def add_transaction(data):
+    data['id'] = get_next_id(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    append_row(TRANSACTIONS_CSV, data, TRANSACTION_COLS)
+
+def update_transaction(trans_id, updates):
+    return update_row(TRANSACTIONS_CSV, trans_id, updates, TRANSACTION_COLS)
+
+def delete_transaction(trans_id):
+    delete_row(TRANSACTIONS_CSV, trans_id, TRANSACTION_COLS)
+
+def get_all_expenses():
+    df = load_df(EXPENSES_CSV, EXPENSE_COLS)
+    return df.to_dict('records')
+
+def add_expense(data):
+    data['id'] = get_next_id(EXPENSES_CSV, EXPENSE_COLS)
+    append_row(EXPENSES_CSV, data, EXPENSE_COLS)
+
+def delete_expense(exp_id):
+    delete_row(EXPENSES_CSV, exp_id, EXPENSE_COLS)
+
+def get_all_withdrawals():
+    df = load_df(WITHDRAWALS_CSV, WITHDRAWAL_COLS)
+    return df.to_dict('records')
+
+def add_withdrawal(data):
+    data['id'] = get_next_id(WITHDRAWALS_CSV, WITHDRAWAL_COLS)
+    append_row(WITHDRAWALS_CSV, data, WITHDRAWAL_COLS)
+
+def get_fund_transactions():
+    df = load_df(FUND_CSV, FUND_COLS)
+    df = df.sort_values('id', ascending=False)
+    return df.to_dict('records')
+
+def add_fund_transaction(data):
+    data['id'] = get_next_id(FUND_CSV, FUND_COLS)
+    append_row(FUND_CSV, data, FUND_COLS)
+
+def get_monthly_report():
+    df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    if len(df) == 0:
+        return []
+    df['month_year'] = df['month_name'] + ' ' + df['year'].astype(str)
+    report = df.groupby(['year', 'month', 'month_year'])['amount'].sum().reset_index()
+    report = report.sort_values(['year', 'month'], ascending=[False, False]).head(12)
+    return report[['month_year', 'amount']].to_dict('records')
+
+def pick_lottery_winner():
+    df = load_df(MEMBERS_CSV, MEMBER_COLS)
+    active = df[df['status'] == 'active']
+    if len(active) == 0:
+        return None
+    return active.sample(1).iloc[0].to_dict()
+
+def get_app_url():
+    return "https://oiorganization2024.streamlit.app"
+
+def get_current_month_collection():
+    current = datetime.now()
+    df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+    if len(df) == 0:
+        return 0.0
+    month_df = df[(df['month'] == current.month) & (df['year'] == current.year)]
+    return month_df['amount'].astype(float).sum()
+
+# ==================== UI থিম ====================
+def apply_dark_theme():
     st.markdown("""
     <style>
-    /* মূল ব্যাকগ্রাউন্ড */
-    .stApp {
-        background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
-        color: #c9d1d9;
-    }
-    /* সাইডবার */
-    section[data-testid="stSidebar"] {
-        background-color: #161b22;
-        border-right: 1px solid #30363d;
-    }
-    /* হেডার */
-    .main-header {
-        background: linear-gradient(90deg, #1a5276 0%, #2980b9 100%);
-        padding: 1.2rem 2rem;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    .main-header h1 {
-        color: white;
-        margin: 0;
-        font-size: 2.2rem;
-    }
-    /* কার্ড */
-    .card {
-        background: #21262d;
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        transition: transform 0.2s;
-    }
-    .card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.3);
-    }
-    /* KPI কার্ড */
-    .kpi-card {
-        background: #21262d;
-        border-radius: 12px;
-        padding: 1.2rem;
-        text-align: center;
-        border-left: 4px solid #58a6ff;
-    }
-    .kpi-value {
-        font-size: 2.2rem;
-        font-weight: bold;
-        color: #58a6ff;
-        margin: 0.2rem 0;
-    }
-    .kpi-label {
-        font-size: 0.9rem;
-        color: #8b949e;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    /* টোটাল ও ক্যাশ বক্স */
-    .total-box {
-        background: linear-gradient(135deg, #1e8449 0%, #27ae60 100%);
-        padding: 1.2rem;
-        border-radius: 12px;
-        color: white;
-        text-align: center;
-    }
-    .cash-box {
-        background: linear-gradient(135deg, #d35400 0%, #e67e22 100%);
-        padding: 1.2rem;
-        border-radius: 12px;
-        color: white;
-        text-align: center;
-    }
-    /* বাটন */
-    .stButton > button {
-        background: linear-gradient(90deg, #238636 0%, #2ea043 100%);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 0.5rem 1.2rem;
-        font-weight: 500;
-        transition: all 0.2s;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(90deg, #2ea043 0%, #3fb950 100%);
-        transform: scale(1.02);
-        box-shadow: 0 2px 8px rgba(46,160,67,0.3);
-    }
-    /* এক্সপ্যান্ডার */
-    .streamlit-expanderHeader {
-        background-color: #21262d;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-    }
-    /* ইনপুট ফিল্ড */
-    .stTextInput > div > div > input,
-    .stNumberInput > div > div > input {
-        background-color: #0d1117;
-        color: white;
-        border: 1px solid #30363d;
-    }
+    .stApp { background: linear-gradient(135deg, #0d1117 0%, #161b22 100%); }
+    .somiti-header { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%); padding: 20px; border-radius: 15px; margin-bottom: 20px; text-align: center; }
+    .somiti-header h1 { color: white; font-size: 32px; font-weight: 800; margin: 0; }
+    .total-box { background: linear-gradient(135deg, #1e8449 0%, #27ae60 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px; }
+    .total-box h2 { color: white; font-size: 28px; font-weight: 800; margin: 0; }
+    .cash-box { background: linear-gradient(135deg, #d35400 0%, #e67e22 100%); padding: 15px; border-radius: 15px; text-align: center; margin-bottom: 20px; }
+    .cash-box h2 { color: white; font-size: 28px; font-weight: 800; margin: 0; }
+    .member-card { background: #21262d; padding: 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #30363d; }
+    .stButton > button { background: linear-gradient(135deg, #238636 0%, #2ea043 100%); color: white; font-weight: 600; border: none; border-radius: 8px; padding: 8px 16px; width: 100%; }
+    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #0d1117 0%, #161b22 100%); border-right: 1px solid #30363d; }
+    .stDataFrame { border-radius: 10px; overflow: hidden; border: 1px solid #30363d; }
+    .stDataFrame th { background: #21262d !important; color: #c9d1d9 !important; }
+    .stDataFrame td { background: #161b22 !important; color: #c9d1d9 !important; }
+    .kpi-card { background: #21262d; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #30363d; }
+    .kpi-card h3 { color: #c9d1d9; font-size: 14px; margin: 0 0 5px 0; }
+    .kpi-card h2 { color: #58a6ff; font-size: 24px; margin: 0; }
     </style>
     """, unsafe_allow_html=True)
 
-apply_custom_css()
-
-# ------------------------------
-# ভাষা সহায়ক ফাংশন
-# ------------------------------
-if 'language' not in st.session_state:
-    st.session_state.language = 'bn'  # 'bn' or 'en'
-
-def t(bn_text, en_text):
-    """ভাষা অনুযায়ী টেক্সট রিটার্ন করে"""
-    return bn_text if st.session_state.language == 'bn' else en_text
-
-# ------------------------------
-# ডাটাবেজ সংযোগ ও ইউটিলিটি
-# ------------------------------
-DB_PATH = "somiti.db"
-
-@contextmanager
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-def init_database():
-    """প্রয়োজনীয় টেবিল তৈরি ও মাইগ্রেশন"""
-    with get_db() as conn:
-        c = conn.cursor()
-
-        # মেম্বার টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS members (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                phone TEXT UNIQUE NOT NULL,
-                email TEXT,
-                password TEXT NOT NULL,
-                total_savings REAL DEFAULT 0,
-                monthly_savings REAL DEFAULT 500,
-                join_date TEXT NOT NULL,
-                status TEXT DEFAULT 'active'
-            )
-        ''')
-
-        # লেনদেন টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                member_id TEXT NOT NULL,
-                amount REAL NOT NULL,
-                transaction_type TEXT DEFAULT 'deposit',
-                day INTEGER,
-                month INTEGER,
-                year INTEGER,
-                month_name TEXT,
-                month_name_en TEXT,
-                full_date TEXT,
-                full_date_en TEXT,
-                date_iso TEXT,
-                late_fee REAL DEFAULT 0,
-                created_at TEXT,
-                FOREIGN KEY (member_id) REFERENCES members(id)
-            )
-        ''')
-
-        # খরচ টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS expenses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                description TEXT NOT NULL,
-                amount REAL NOT NULL,
-                date TEXT NOT NULL,
-                category TEXT,
-                created_at TEXT
-            )
-        ''')
-
-        # উত্তোলন টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS withdrawals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                description TEXT,
-                withdrawn_by TEXT,
-                previous_balance REAL,
-                current_balance REAL,
-                created_at TEXT
-            )
-        ''')
-
-        # ফান্ড লেনদেন টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS fund_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
-                amount REAL NOT NULL,
-                description TEXT,
-                date TEXT NOT NULL,
-                previous_balance REAL,
-                current_balance REAL,
-                created_at TEXT
-            )
-        ''')
-
-        # সেটিংস টেবিল
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-
-        # ডিফল্ট সেটিংস
-        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_date', ?)",
-                  (datetime.date.today().isoformat(),))
-
-        conn.commit()
-
-def execute_query(query, params=(), fetch=False):
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute(query, params)
-        if fetch:
-            return c.fetchall()
-        conn.commit()
-
-def get_setting(key, default=None):
-    row = execute_query("SELECT value FROM settings WHERE key=?", (key,), fetch=True)
-    return row[0]['value'] if row else default
-
-def set_setting(key, value):
-    execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-
-# ------------------------------
-# অথেন্টিকেশন ও ইউটিলিটি
-# ------------------------------
-def generate_member_id():
-    rows = execute_query("SELECT COUNT(*) as cnt FROM members", fetch=True)
-    count = rows[0]['cnt']
-    return str(10001 + count)
-
-def generate_password(length=6):
-    return ''.join(random.choices(string.digits, k=length))
-
-def hash_password(pwd):
-    return hashlib.sha256(pwd.encode()).hexdigest()
-
-def verify_password(pwd, hashed):
-    return hash_password(pwd) == hashed
-
-def get_cash_balance():
-    total_savings = execute_query("SELECT SUM(total_savings) FROM members WHERE status='active'", fetch=True)[0][0] or 0
-    total_expenses = execute_query("SELECT SUM(amount) FROM expenses", fetch=True)[0][0] or 0
-    total_withdrawals = execute_query("SELECT SUM(amount) FROM withdrawals", fetch=True)[0][0] or 0
-    fund_deposits = execute_query("SELECT SUM(amount) FROM fund_transactions WHERE type='deposit'", fetch=True)[0][0] or 0
-    fund_withdrawals = execute_query("SELECT SUM(amount) FROM fund_transactions WHERE type='withdrawal'", fetch=True)[0][0] or 0
-    return total_savings - total_expenses - total_withdrawals + fund_deposits - fund_withdrawals
-
-def get_paid_members(month, year):
-    rows = execute_query("""
-        SELECT DISTINCT member_id FROM transactions
-        WHERE month=? AND year=?
-    """, (month, year), fetch=True)
-    return [r['member_id'] for r in rows]
-
-def get_unpaid_members(month, year):
-    all_active = execute_query("SELECT id FROM members WHERE status='active'", fetch=True)
-    paid = get_paid_members(month, year)
-    return [r['id'] for r in all_active if r['id'] not in paid]
-
-# ------------------------------
-# ইমেইল ফাংশন
-# ------------------------------
-def send_email(to_email, subject, body):
-    try:
-        smtp_user = st.secrets["email"]["smtp_user"]
-        smtp_pass = st.secrets["email"]["smtp_pass"]
-    except:
-        st.error("ইমেইল কনফিগারেশন পাওয়া যায়নি। secrets.toml ফাইল চেক করুন।")
-        return False
-
-    msg = MIMEMultipart()
-    msg['From'] = smtp_user
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        return True
-    except Exception as e:
-        st.error(f"ইমেইল পাঠাতে ব্যর্থ: {e}")
-        return False
-
-# ------------------------------
-# এডমিন লগইন
-# ------------------------------
-ADMIN_MOBILE = "01766222373"
-ADMIN_PASSWORD_HASH = hash_password("oio112024")  # ডিফল্ট পাসওয়ার্ড
-
-def admin_login(mobile, password):
-    if mobile == ADMIN_MOBILE and verify_password(password, ADMIN_PASSWORD_HASH):
-        st.session_state.logged_in = True
-        st.session_state.user_type = 'admin'
-        st.session_state.user_data = {'mobile': mobile}
-        return True
-    return False
-
-def member_login(email, password, member_id):
-    rows = execute_query("SELECT * FROM members WHERE id=? AND email=? AND status='active'",
-                         (member_id, email), fetch=True)
-    if rows and verify_password(password, rows[0]['password']):
-        st.session_state.logged_in = True
-        st.session_state.user_type = 'member'
-        st.session_state.user_data = dict(rows[0])
-        return True
-    return False
-
-# ------------------------------
-# এডমিন ড্যাশবোর্ড
-# ------------------------------
-def admin_dashboard():
-    st.markdown('<div class="main-header"><h1>🤝 ঐক্য উদ্যোগ সংস্থা - এডমিন প্যানেল</h1></div>', unsafe_allow_html=True)
-
-    # KPI কার্ড
-    total_members = execute_query("SELECT COUNT(*) FROM members WHERE status='active'", fetch=True)[0][0]
-    total_savings = execute_query("SELECT SUM(total_savings) FROM members WHERE status='active'", fetch=True)[0][0] or 0
-    current_month = datetime.date.today().month
-    current_year = datetime.date.today().year
-    paid_count = len(get_paid_members(current_month, current_year))
-    unpaid_count = total_members - paid_count
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-value">{total_members}</div><div class="kpi-label">{t("মোট সদস্য", "Total Members")}</div></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-value">৳{total_savings:,.0f}</div><div class="kpi-label">{t("মোট জমা", "Total Savings")}</div></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-value">৳{paid_count * 500:,.0f}</div><div class="kpi-label">{t("এই মাসের কালেকশন", "This Month Collection")}</div></div>', unsafe_allow_html=True)
-    with col4:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-value">{unpaid_count}</div><div class="kpi-label">{t("বাকি আছেন", "Pending")}</div></div>', unsafe_allow_html=True)
-
-    # টোটাল ও ক্যাশ বক্স
+def show_admin_header():
+    total = get_total_savings()
+    cash = get_cash_balance()
+    st.markdown(f'<div class="somiti-header"><h1>🌾 {SOMITI_NAME} 🌾</h1><p>{t("সঞ্চয় ও ঋণ ব্যবস্থাপনা", "Savings & Loan Management")}</p></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown(f'<div class="total-box"><h3>{t("মোট তহবিল", "Total Fund")}</h3><h2>৳{total_savings:,.0f}</h2></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="total-box"><h2>💰 {total:,.0f} {t("টাকা", "Taka")}</h2><p>{t("মোট জমা", "Total Savings")}</p></div>', unsafe_allow_html=True)
     with col2:
-        cash = get_cash_balance()
-        st.markdown(f'<div class="cash-box"><h3>{t("বর্তমান ক্যাশ", "Current Cash")}</h3><h2>৳{cash:,.0f}</h2></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cash-box"><h2>💵 {cash:,.0f} {t("টাকা", "Taka")}</h2><p>{t("ক্যাশ ব্যালেন্স", "Cash Balance")}</p></div>', unsafe_allow_html=True)
 
-    if st.button(t("রিফ্রেশ করুন", "Refresh Data")):
-        st.rerun()
-
-def new_member_registration():
-    st.subheader(t("➕ নতুন সদস্য নিবন্ধন", "➕ New Member Registration"))
-    with st.form("new_member_form"):
-        name = st.text_input(t("নাম *", "Name *"))
-        phone = st.text_input(t("মোবাইল *", "Mobile *"))
-        email = st.text_input(t("ইমেইল", "Email"))
-        monthly = st.number_input(t("মাসিক কিস্তি (টাকা)", "Monthly Installment (Tk)"), value=500, min_value=100, step=50)
-
-        submitted = st.form_submit_button(t("নিবন্ধন করুন", "Register"))
-        if submitted:
-            if not name or not phone:
-                st.error(t("নাম ও মোবাইল আবশ্যক", "Name and mobile are required"))
-            else:
-                # চেক ইউনিক মোবাইল
-                existing = execute_query("SELECT id FROM members WHERE phone=?", (phone,), fetch=True)
-                if existing:
-                    st.error(t("এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত", "This mobile number is already registered"))
-                else:
-                    member_id = generate_member_id()
-                    password = generate_password()
-                    join_date = datetime.date.today().isoformat()
-                    execute_query("""
-                        INSERT INTO members (id, name, phone, email, password, monthly_savings, join_date)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (member_id, name, phone, email, hash_password(password), monthly, join_date))
-                    st.success(t(f"✅ সদস্য তৈরি হয়েছে! আইডি: {member_id}, পাসওয়ার্ড: {password}", f"✅ Member created! ID: {member_id}, Password: {password}"))
-                    st.balloons()
-                    time.sleep(1.5)
-                    st.rerun()
-
-def member_management():
-    st.subheader(t("✏️ সদস্য ব্যবস্থাপনা", "✏️ Member Management"))
-    members = execute_query("SELECT * FROM members ORDER BY join_date DESC", fetch=True)
+# ==================== পিডিএফ ====================
+def generate_pdf_member_list():
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+    styles = getSampleStyleSheet()
+    elements.append(Paragraph(f"{SOMITI_NAME} - Member List", styles['Heading1']))
+    elements.append(Spacer(1, 20))
+    members = get_all_members()
+    data = [['ID', 'Name', 'Mobile', 'Monthly', 'Savings']]
     for m in members:
-        with st.expander(f"{m['name']} ({m['id']}) - {m['phone']}"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**{t('ইমেইল', 'Email')}:** {m['email'] or '-'}")
-                st.write(f"**{t('মোট জমা', 'Total Savings')}:** ৳{m['total_savings']:,.0f}")
-                st.write(f"**{t('মাসিক কিস্তি', 'Monthly')}:** ৳{m['monthly_savings']:,.0f}")
-                st.write(f"**{t('স্ট্যাটাস', 'Status')}:** {m['status']}")
-            with col2:
-                # এডিট ফর্ম
-                with st.form(f"edit_member_{m['id']}"):
-                    new_name = st.text_input(t("নাম", "Name"), value=m['name'])
-                    new_phone = st.text_input(t("মোবাইল", "Mobile"), value=m['phone'])
-                    new_email = st.text_input(t("ইমেইল", "Email"), value=m['email'] or "")
-                    new_monthly = st.number_input(t("মাসিক কিস্তি", "Monthly"), value=float(m['monthly_savings']), step=50.0)
-                    if st.form_submit_button(t("আপডেট", "Update")):
-                        execute_query("""
-                            UPDATE members SET name=?, phone=?, email=?, monthly_savings=?
-                            WHERE id=?
-                        """, (new_name, new_phone, new_email, new_monthly, m['id']))
-                        st.success(t("আপডেট সফল", "Updated successfully"))
-                        st.rerun()
+        monthly = float(m.get('monthly_savings', 500))
+        savings = float(m.get('total_savings', 0))
+        data.append([m['id'], m['name'], m['phone'], f"{monthly:,.0f}", f"{savings:,.0f}"])
+    table = Table(data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a5276')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
-            # অ্যাকশন বাটন
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                if st.button(t("পাসওয়ার্ড রিসেট", "Reset Password"), key=f"reset_{m['id']}"):
-                    new_pwd = generate_password()
-                    execute_query("UPDATE members SET password=? WHERE id=?", (hash_password(new_pwd), m['id']))
-                    st.success(f"নতুন পাসওয়ার্ড: {new_pwd}")
-            with c2:
-                new_status = 'inactive' if m['status'] == 'active' else 'active'
-                if st.button(t("নিষ্ক্রিয় করুন" if m['status']=='active' else "সক্রিয় করুন", "Deactivate" if m['status']=='active' else "Activate"), key=f"toggle_{m['id']}"):
-                    execute_query("UPDATE members SET status=? WHERE id=?", (new_status, m['id']))
-                    st.rerun()
-            with c3:
-                if st.button(t("মুছে ফেলুন", "Delete"), key=f"delete_{m['id']}"):
-                    if st.warning(t("নিশ্চিত? এটি স্থায়ী হবে", "Confirm? This is permanent")):
-                        execute_query("DELETE FROM members WHERE id=?", (m['id'],))
-                        st.rerun()
-
-def deposit_management():
-    st.subheader(t("💵 টাকা জমা", "💵 Deposit"))
-    today = datetime.date.today()
-    current_month = today.month
-    current_year = today.year
-
-    tab1, tab2 = st.tabs([t("জমা দিয়েছে", "Paid"), t("জমা দেয়নি", "Unpaid")])
-
-    with tab1:
-        paid_ids = get_paid_members(current_month, current_year)
-        if not paid_ids:
-            st.info(t("এই মাসে কেউ জমা দেয়নি", "No payments this month"))
-        else:
-            for mid in paid_ids:
-                m = execute_query("SELECT * FROM members WHERE id=?", (mid,), fetch=True)[0]
-                st.write(f"✅ {m['name']} ({m['id']})")
-
-    with tab2:
-        unpaid_ids = get_unpaid_members(current_month, current_year)
-        if not unpaid_ids:
-            st.success(t("সবাই জমা দিয়েছে!", "Everyone has paid!"))
-        else:
-            for mid in unpaid_ids:
-                m = execute_query("SELECT * FROM members WHERE id=?", (mid,), fetch=True)[0]
-                with st.expander(f"{m['name']} ({m['id']}) - মাসিক {m['monthly_savings']} টাকা"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        pay_date = st.date_input(t("তারিখ", "Date"), value=today, key=f"date_{mid}")
-                        months_count = st.number_input(t("কত মাসের জমা", "Number of months"), min_value=1, max_value=12, value=1, key=f"months_{mid}")
-                    with col2:
-                        late_fee = st.number_input(t("লেট ফি", "Late Fee"), min_value=0.0, value=0.0, step=10.0, key=f"fee_{mid}")
-                    if st.button(t("জমা নিন", "Deposit"), key=f"deposit_{mid}"):
-                        amount_per_month = m['monthly_savings']
-                        total_amount = amount_per_month * months_count + late_fee
-                        # ট্রানজেকশন তৈরি
-                        for i in range(months_count):
-                            # মাস নির্ধারণ (বর্তমান মাস থেকে পিছিয়ে)
-                            month_offset = i
-                            tx_date = pay_date - datetime.timedelta(days=30*month_offset)
-                            tx_month = tx_date.month
-                            tx_year = tx_date.year
-                            # চেক করুন ইতিমধ্যে জমা আছে কিনা
-                            exists = execute_query("""
-                                SELECT id FROM transactions
-                                WHERE member_id=? AND month=? AND year=?
-                            """, (mid, tx_month, tx_year), fetch=True)
-                            if not exists:
-                                execute_query("""
-                                    INSERT INTO transactions
-                                    (member_id, amount, day, month, year, month_name, month_name_en, full_date, full_date_en, date_iso, late_fee, created_at)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
-                                    mid, amount_per_month, tx_date.day, tx_month, tx_year,
-                                    tx_date.strftime('%B'), tx_date.strftime('%B'),  # বাংলা পরে ইম্প্রুভ করা যাবে
-                                    tx_date.strftime('%d/%m/%Y'), tx_date.strftime('%d/%m/%Y'),
-                                    tx_date.isoformat(),
-                                    late_fee if i == 0 else 0,  # শুধু প্রথম মাসে লেট ফি
-                                    datetime.datetime.now().isoformat()
-                                ))
-                        # মোট সঞ্চয় আপডেট
-                        execute_query("UPDATE members SET total_savings = total_savings + ? WHERE id=?", (total_amount, mid))
-                        st.success(t(f"✅ জমা সফল! মোট {total_amount} টাকা", f"✅ Deposit successful! Total {total_amount} Tk"))
-                        st.balloons()
-                        time.sleep(1.5)
-                        st.rerun()
-
-def transaction_management():
-    st.subheader(t("💰 লেনদেন ব্যবস্থাপনা", "💰 Transaction Management"))
-    members = execute_query("SELECT id, name FROM members WHERE status='active'", fetch=True)
-    member_options = {m['name']: m['id'] for m in members}
-    selected_name = st.selectbox(t("সদস্য নির্বাচন করুন", "Select Member"), list(member_options.keys()))
-    if selected_name:
-        member_id = member_options[selected_name]
-        transactions = execute_query("""
-            SELECT * FROM transactions WHERE member_id=? ORDER BY date_iso DESC
-        """, (member_id,), fetch=True)
-
-        if transactions:
-            df = pd.DataFrame([dict(t) for t in transactions])
-            df_display = df[['full_date', 'amount', 'late_fee', 'month_name']].copy()
-            df_display.columns = [t('তারিখ', 'Date'), t('পরিমাণ', 'Amount'), t('লেট ফি', 'Late Fee'), t('মাস', 'Month')]
-            st.dataframe(df_display, use_container_width=True)
-
-            # এডিট/ডিলিট
-            tx_id = st.selectbox(t("সম্পাদনার জন্য লেনদেন নির্বাচন", "Select transaction to edit"), df['id'].tolist(), format_func=lambda x: f"ID {x}")
-            if tx_id:
-                tx = df[df['id'] == tx_id].iloc[0].to_dict()
-                with st.form("edit_tx"):
-                    new_amount = st.number_input(t("পরিমাণ", "Amount"), value=float(tx['amount']))
-                    new_fee = st.number_input(t("লেট ফি", "Late Fee"), value=float(tx['late_fee']))
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.form_submit_button(t("আপডেট", "Update")):
-                            diff = (new_amount + new_fee) - (tx['amount'] + tx['late_fee'])
-                            execute_query("UPDATE transactions SET amount=?, late_fee=? WHERE id=?", (new_amount, new_fee, tx_id))
-                            execute_query("UPDATE members SET total_savings = total_savings + ? WHERE id=?", (diff, member_id))
-                            st.success(t("আপডেট সফল", "Updated"))
-                            st.rerun()
-                    with col2:
-                        if st.form_submit_button(t("মুছে ফেলুন", "Delete")):
-                            execute_query("DELETE FROM transactions WHERE id=?", (tx_id,))
-                            execute_query("UPDATE members SET total_savings = total_savings - ? WHERE id=?", (tx['amount'] + tx['late_fee'], member_id))
-                            st.success(t("মুছে ফেলা হয়েছে", "Deleted"))
-                            st.rerun()
-        else:
-            st.info(t("কোনো লেনদেন নেই", "No transactions found"))
-
-def member_links():
-    st.subheader(t("🔗 সদস্য লিংক", "🔗 Member Links"))
-    members = execute_query("SELECT id, name, email, password FROM members WHERE status='active'", fetch=True)
-    base_url = st.query_params.get("base_url", "http://localhost:8501")  # ডিফল্ট লোকাল
-    for m in members:
-        with st.container():
-            cols = st.columns([3,1,1,1])
-            with cols[0]:
-                st.write(f"**{m['name']}** ({m['id']})")
-            with cols[1]:
-                link = f"{base_url}?id={m['id']}"
-                st.code(link, language=None)
-            with cols[2]:
-                if st.button(t("লিংক কপি", "Copy Link"), key=f"copy_link_{m['id']}"):
-                    st.write(f'<span id="copy_{m["id"]}">{link}</span>', unsafe_allow_html=True)
-                    st.markdown(f"""
-                    <script>
-                    navigator.clipboard.writeText("{link}");
-                    alert("লিংক কপি করা হয়েছে");
-                    </script>
-                    """, unsafe_allow_html=True)
-            with cols[3]:
-                if st.button(t("পাসওয়ার্ড কপি", "Copy Password"), key=f"copy_pwd_{m['id']}"):
-                    st.write(f'<span id="pwd_{m["id"]}">{m["password"]}</span>', unsafe_allow_html=True)
-                    st.markdown(f"""
-                    <script>
-                    navigator.clipboard.writeText("{m["password"]}");
-                    alert("পাসওয়ার্ড কপি করা হয়েছে");
-                    </script>
-                    """, unsafe_allow_html=True)
-            if m['email'] and st.button(t("ইমেইল পাঠান", "Send Email"), key=f"email_{m['id']}"):
-                subject = "আপনার ঐক্য উদ্যোগ সংস্থা লগইন তথ্য"
-                body = f"আইডি: {m['id']}\nপাসওয়ার্ড: {m['password']}\nলগইন লিংক: {link}"
-                if send_email(m['email'], subject, body):
-                    st.success("ইমেইল পাঠানো হয়েছে")
-
-def expense_management():
-    st.subheader(t("💸 খরচ ব্যবস্থাপনা", "💸 Expense Management"))
-    # নতুন খরচ ফর্ম
-    with st.form("add_expense"):
-        desc = st.text_input(t("বিবরণ", "Description"))
-        amount = st.number_input(t("পরিমাণ", "Amount"), min_value=0.0)
-        category = st.selectbox(t("ক্যাটাগরি", "Category"), ["অফিস খরচ", "ইভেন্ট", "অন্যান্য"])
-        exp_date = st.date_input(t("তারিখ", "Date"), value=datetime.date.today())
-        if st.form_submit_button(t("যোগ করুন", "Add")):
-            execute_query("""
-                INSERT INTO expenses (description, amount, date, category, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (desc, amount, exp_date.isoformat(), category, datetime.datetime.now().isoformat()))
-            st.success(t("খরচ যোগ করা হয়েছে", "Expense added"))
-            st.rerun()
-
-    # খরচ তালিকা
-    expenses = execute_query("SELECT * FROM expenses ORDER BY date DESC", fetch=True)
-    if expenses:
-        df = pd.DataFrame([dict(e) for e in expenses])
-        total_exp = df['amount'].sum()
-        st.metric(t("মোট খরচ", "Total Expenses"), f"৳{total_exp:,.0f}")
-        for _, row in df.iterrows():
-            cols = st.columns([2,1,2,1,1])
-            cols[0].write(row['date'])
-            cols[1].write(row['category'])
-            cols[2].write(row['description'])
-            cols[3].write(f"৳{row['amount']:,.0f}")
-            if cols[4].button(t("মুছুন", "Delete"), key=f"del_exp_{row['id']}"):
-                execute_query("DELETE FROM expenses WHERE id=?", (row['id'],))
-                st.rerun()
-
-def fund_management():
-    st.subheader(t("🏧 ফান্ড ব্যবস্থাপনা", "🏧 Fund Management"))
-    cash = get_cash_balance()
-    st.metric(t("বর্তমান ক্যাশ ব্যালেন্স", "Current Cash Balance"), f"৳{cash:,.0f}")
-
-    tab1, tab2, tab3 = st.tabs([t("জমা", "Deposit"), t("উত্তোলন", "Withdrawal"), t("ইতিহাস", "History")])
-
-    with tab1:
-        with st.form("fund_deposit"):
-            amount = st.number_input(t("পরিমাণ", "Amount"), min_value=0.0)
-            desc = st.text_input(t("বিবরণ", "Description"))
-            if st.form_submit_button(t("জমা করুন", "Deposit")):
-                prev = cash
-                new_bal = prev + amount
-                execute_query("""
-                    INSERT INTO fund_transactions (type, amount, description, date, previous_balance, current_balance, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, ('deposit', amount, desc, datetime.date.today().isoformat(), prev, new_bal, datetime.datetime.now().isoformat()))
-                st.success(t("ফান্ড জমা হয়েছে", "Fund deposited"))
-                st.rerun()
-
-    with tab2:
-        with st.form("fund_withdraw"):
-            amount = st.number_input(t("পরিমাণ", "Amount"), min_value=0.0)
-            desc = st.text_input(t("বিবরণ", "Description"))
-            if st.form_submit_button(t("উত্তোলন করুন", "Withdraw")):
-                if amount > cash:
-                    st.error(t("পর্যাপ্ত ব্যালেন্স নেই", "Insufficient balance"))
-                else:
-                    prev = cash
-                    new_bal = prev - amount
-                    execute_query("""
-                        INSERT INTO fund_transactions (type, amount, description, date, previous_balance, current_balance, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, ('withdrawal', amount, desc, datetime.date.today().isoformat(), prev, new_bal, datetime.datetime.now().isoformat()))
-                    st.success(t("উত্তোলন সম্পন্ন", "Withdrawn"))
-                    st.rerun()
-
-    with tab3:
-        history = execute_query("SELECT * FROM fund_transactions ORDER BY date DESC", fetch=True)
-        if history:
-            df = pd.DataFrame([dict(h) for h in history])
-            st.dataframe(df[['date', 'type', 'amount', 'description', 'current_balance']])
-
-def reports():
-    st.subheader(t("📊 রিপোর্ট", "📊 Reports"))
-    # মাসিক কালেকশন বার চার্ট
-    tx_data = execute_query("""
-        SELECT year, month, SUM(amount) as total FROM transactions GROUP BY year, month ORDER BY year, month
-    """, fetch=True)
-    if tx_data:
-        df = pd.DataFrame([dict(r) for r in tx_data])
-        df['period'] = df['year'].astype(str) + '-' + df['month'].astype(str).str.zfill(2)
-        st.bar_chart(df.set_index('period')['total'])
-
-    # বকেয়াদার তালিকা
-    unpaid = get_unpaid_members(datetime.date.today().month, datetime.date.today().year)
-    if unpaid:
-        st.subheader(t("এই মাসের বাকি সদস্য", "Pending Members This Month"))
-        for mid in unpaid:
-            m = execute_query("SELECT name, phone FROM members WHERE id=?", (mid,), fetch=True)[0]
-            st.write(f"- {m['name']} ({m['phone']})")
-
-def pdf_download():
-    st.subheader(t("📥 পিডিএফ ডাউনলোড", "📥 PDF Download"))
-    report_type = st.selectbox(t("রিপোর্ট টাইপ", "Report Type"),
-                               [t("সদস্য তালিকা", "Member List"),
-                                t("সম্পূর্ণ লেনদেন", "All Transactions"),
-                                t("নির্দিষ্ট সদস্যের লেনদেন", "Specific Member Transactions")])
-
-    if report_type == t("নির্দিষ্ট সদস্যের লেনদেন", "Specific Member Transactions"):
-        members = execute_query("SELECT id, name FROM members", fetch=True)
-        member_id = st.selectbox(t("সদস্য", "Member"), [m['id'] for m in members], format_func=lambda x: f"{x} - {next(m['name'] for m in members if m['id']==x)}")
-
-    if st.button(t("পিডিএফ জেনারেট করুন", "Generate PDF")):
-        buffer = io.BytesIO()
-        c = canvas.Canvas(buffer, pagesize=A4)
-        width, height = A4
-
-        if report_type == t("সদস্য তালিকা", "Member List"):
-            members = execute_query("SELECT * FROM members", fetch=True)
-            data = [['ID', 'Name', 'Phone', 'Total Savings']]
-            for m in members:
-                data.append([m['id'], m['name'], m['phone'], f"{m['total_savings']:.0f}"])
-            table = Table(data)
-            table.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
-                                       ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                                       ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                       ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                                       ('BOTTOMPADDING', (0,0), (-1,0), 12),
-                                       ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-            table.wrapOn(c, width, height)
-            table.drawOn(c, 30, height-150)
-
-        elif report_type == t("সম্পূর্ণ লেনদেন", "All Transactions"):
-            tx = execute_query("""
-                SELECT m.name, t.full_date, t.amount, t.late_fee FROM transactions t
-                JOIN members m ON t.member_id = m.id ORDER BY t.date_iso DESC
-            """, fetch=True)
-            data = [['Member', 'Date', 'Amount', 'Late Fee']]
-            for row in tx:
-                data.append([row['name'], row['full_date'], f"{row['amount']:.0f}", f"{row['late_fee']:.0f}"])
-            table = Table(data)
-            table.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
-                                       ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                                       ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                       ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-            table.wrapOn(c, width, height)
-            table.drawOn(c, 30, height-150)
-
-        else:
-            tx = execute_query("""
-                SELECT full_date, amount, late_fee FROM transactions WHERE member_id=? ORDER BY date_iso DESC
-            """, (member_id,), fetch=True)
-            data = [['Date', 'Amount', 'Late Fee']]
-            for row in tx:
-                data.append([row['full_date'], f"{row['amount']:.0f}", f"{row['late_fee']:.0f}"])
-            table = Table(data)
-            table.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
-                                       ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                                       ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                       ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-            table.wrapOn(c, width, height)
-            table.drawOn(c, 30, height-150)
-
-        c.save()
-        buffer.seek(0)
-        b64 = base64.b64encode(buffer.read()).decode()
-        href = f'<a href="data:application/octet-stream;base64,{b64}" download="report.pdf">📥 {t("ডাউনলোড", "Download")}</a>'
-        st.markdown(href, unsafe_allow_html=True)
-
-def email_test():
-    st.subheader(t("📧 ইমেইল টেস্ট", "📧 Email Test"))
-    email = st.text_input(t("ইমেইল ঠিকানা", "Email Address"))
-    if st.button(t("টেস্ট ইমেইল পাঠান", "Send Test Email")):
-        if send_email(email, "Test from Oikko Uddog", "This is a test email."):
-            st.success(t("ইমেইল পাঠানো হয়েছে", "Email sent successfully"))
-        else:
-            st.error(t("পাঠানো সম্ভব হয়নি", "Failed to send"))
-
-def lottery():
-    st.subheader(t("🎲 লটারি", "🎲 Lottery"))
-    if st.button(t("বিজয়ী নির্বাচন করুন", "Pick Winner")):
-        members = execute_query("SELECT id, name FROM members WHERE status='active'", fetch=True)
-        if members:
-            winner = random.choice(members)
-            st.success(f"🏆 {t('বিজয়ী', 'Winner')}: {winner['name']} ({winner['id']})")
-            st.balloons()
-        else:
-            st.warning(t("কোনো সক্রিয় সদস্য নেই", "No active members"))
-
-# ------------------------------
-# সদস্য প্যানেল
-# ------------------------------
-def member_panel():
-    member = st.session_state.user_data
-    st.markdown(f'<div class="main-header"><h1>স্বাগতম, {member["name"]}</h1></div>', unsafe_allow_html=True)
-
-    tab1, tab2, tab3 = st.tabs([t("ড্যাশবোর্ড", "Dashboard"),
-                                t("পাসওয়ার্ড পরিবর্তন", "Change Password"),
-                                t("রিপোর্ট", "Report")])
-
-    with tab1:
-        st.metric(t("মোট জমা", "Total Savings"), f"৳{member['total_savings']:,.0f}")
-        # এই মাসের পেমেন্ট স্ট্যাটাস
-        today = datetime.date.today()
-        paid = execute_query("""
-            SELECT * FROM transactions WHERE member_id=? AND month=? AND year=?
-        """, (member['id'], today.month, today.year), fetch=True)
-        if paid:
-            st.success(t("এই মাসের কিস্তি জমা হয়েছে", "This month's installment paid"))
-        else:
-            st.warning(t("এই মাসের কিস্তি জমা হয়নি", "This month's installment not paid"))
-
-        # লেনদেন ইতিহাস
-        tx = execute_query("""
-            SELECT full_date, amount, late_fee FROM transactions WHERE member_id=? ORDER BY date_iso DESC LIMIT 10
-        """, (member['id'],), fetch=True)
-        if tx:
-            df = pd.DataFrame([dict(t) for t in tx])
-            st.dataframe(df)
-
-    with tab2:
-        with st.form("change_password"):
-            new_pwd = st.text_input(t("নতুন পাসওয়ার্ড", "New Password"), type="password")
-            confirm = st.text_input(t("পাসওয়ার্ড নিশ্চিত করুন", "Confirm Password"), type="password")
-            if st.form_submit_button(t("আপডেট", "Update")):
-                if new_pwd != confirm:
-                    st.error(t("পাসওয়ার্ড মিলছে না", "Passwords do not match"))
-                elif len(new_pwd) < 6:
-                    st.error(t("পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে", "Password must be at least 6 characters"))
-                else:
-                    execute_query("UPDATE members SET password=? WHERE id=?", (hash_password(new_pwd), member['id']))
-                    st.success(t("পাসওয়ার্ড পরিবর্তন সফল", "Password changed successfully"))
-
-    with tab3:
-        if st.button(t("আমার লেনদেন রিপোর্ট (পিডিএফ)", "My Transaction Report (PDF)")):
-            buffer = io.BytesIO()
-            c = canvas.Canvas(buffer, pagesize=A4)
-            tx = execute_query("SELECT full_date, amount, late_fee FROM transactions WHERE member_id=? ORDER BY date_iso", (member['id'],), fetch=True)
-            data = [['Date', 'Amount', 'Late Fee']]
-            for row in tx:
-                data.append([row['full_date'], f"{row['amount']:.0f}", f"{row['late_fee']:.0f}"])
-            table = Table(data)
-            table.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
-                                       ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                                       ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                       ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-            table.wrapOn(c, 400, 600)
-            table.drawOn(c, 30, 750)
-            c.save()
-            buffer.seek(0)
-            b64 = base64.b64encode(buffer.read()).decode()
-            href = f'<a href="data:application/octet-stream;base64,{b64}" download="my_transactions.pdf">📥 {t("ডাউনলোড", "Download")}</a>'
-            st.markdown(href, unsafe_allow_html=True)
-
-# ------------------------------
-# মেইন অ্যাপ
-# ------------------------------
-def main():
-    init_database()
-
-    # ভাষা টগল
-    col1, col2 = st.columns([4,1])
-    with col2:
-        lang = st.radio("🌐", ["বাংলা", "English"], horizontal=True, label_visibility="collapsed")
-        st.session_state.language = 'bn' if lang == "বাংলা" else 'en'
-
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-        st.session_state.user_type = None
-        st.session_state.user_data = None
-
-    # লগইন না থাকলে লগইন ফর্ম দেখাও
-    if not st.session_state.logged_in:
-        # চেক ইউআরএল প্যারামিটার (সদস্য লগইনের জন্য)
-        params = st.query_params
-        member_id_from_url = params.get("id", None)
-
-        if member_id_from_url:
-            st.title(t("সদস্য লগইন", "Member Login"))
-            with st.form("member_login"):
-                email = st.text_input(t("ইমেইল", "Email"))
-                password = st.text_input(t("পাসওয়ার্ড", "Password"), type="password")
-                submitted = st.form_submit_button(t("লগইন", "Login"))
-                if submitted:
-                    if member_login(email, password, member_id_from_url):
-                        st.success(t("লগইন সফল", "Login successful"))
-                        st.rerun()
-                    else:
-                        st.error(t("ভুল তথ্য", "Invalid credentials"))
-        else:
-            st.title(t("এডমিন লগইন", "Admin Login"))
-            with st.form("admin_login"):
-                mobile = st.text_input(t("মোবাইল নম্বর", "Mobile Number"))
-                password = st.text_input(t("পাসওয়ার্ড", "Password"), type="password")
-                submitted = st.form_submit_button(t("লগইন", "Login"))
-                if submitted:
-                    if admin_login(mobile, password):
-                        st.success(t("লগইন সফল", "Login successful"))
-                        st.rerun()
-                    else:
-                        st.error(t("ভুল মোবাইল বা পাসওয়ার্ড", "Invalid mobile or password"))
-        st.stop()
-
-    # লগইন থাকলে সাইডবার ও কন্টেন্ট
-    with st.sidebar:
-        st.image("https://via.placeholder.com/200x80?text=Oikko+Uddog", use_column_width=True)
-        if st.session_state.user_type == 'admin':
-            menu = st.radio(
-                t("মেনু", "Menu"),
-                [t("🏠 ড্যাশবোর্ড", "🏠 Dashboard"),
-                 t("➕ নতুন সদস্য", "➕ New Member"),
-                 t("✏️ সদস্য ব্যবস্থাপনা", "✏️ Member Management"),
-                 t("💵 টাকা জমা", "💵 Deposit"),
-                 t("💰 লেনদেন ব্যবস্থাপনা", "💰 Transactions"),
-                 t("🔗 সদস্য লিংক", "🔗 Member Links"),
-                 t("💸 খরচ ব্যবস্থাপনা", "💸 Expenses"),
-                 t("🏧 ফান্ড ব্যবস্থাপনা", "🏧 Fund"),
-                 t("📊 রিপোর্ট", "📊 Reports"),
-                 t("📥 পিডিএফ ডাউনলোড", "📥 PDF Download"),
-                 t("📧 ইমেইল টেস্ট", "📧 Email Test"),
-                 t("🎲 লটারি", "🎲 Lottery")]
-            )
-        else:
-            menu = t("সদস্য প্যানেল", "Member Panel")
-
-        if st.button(t("লগআউট", "Logout")):
-            st.session_state.logged_in = False
-            st.rerun()
-
-    if st.session_state.user_type == 'admin':
-        if menu == t("🏠 ড্যাশবোর্ড", "🏠 Dashboard"):
-            admin_dashboard()
-        elif menu == t("➕ নতুন সদস্য", "➕ New Member"):
-            new_member_registration()
-        elif menu == t("✏️ সদস্য ব্যবস্থাপনা", "✏️ Member Management"):
-            member_management()
-        elif menu == t("💵 টাকা জমা", "💵 Deposit"):
-            deposit_management()
-        elif menu == t("💰 লেনদেন ব্যবস্থাপনা", "💰 Transactions"):
-            transaction_management()
-        elif menu == t("🔗 সদস্য লিংক", "🔗 Member Links"):
-            member_links()
-        elif menu == t("💸 খরচ ব্যবস্থাপনা", "💸 Expenses"):
-            expense_management()
-        elif menu == t("🏧 ফান্ড ব্যবস্থাপনা", "🏧 Fund"):
-            fund_management()
-        elif menu == t("📊 রিপোর্ট", "📊 Reports"):
-            reports()
-        elif menu == t("📥 পিডিএফ ডাউনলোড", "📥 PDF Download"):
-            pdf_download()
-        elif menu == t("📧 ইমেইল টেস্ট", "📧 Email Test"):
-            email_test()
-        elif menu == t("🎲 লটারি", "🎲 Lottery"):
-            lottery()
+def generate_pdf_transactions(member_id=None):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+    styles = getSampleStyleSheet()
+    title = f"{SOMITI_NAME} - Transaction Report"
+    if member_id:
+        member = get_member_by_id(member_id)
+        if member:
+            title = f"{SOMITI_NAME} - {member['name']} ({member_id})"
+    elements.append(Paragraph(title, styles['Heading1']))
+    elements.append(Spacer(1, 20))
+    
+    if member_id:
+        trans = get_member_transactions(member_id)
+        data = [['Date', 'Amount', 'Month', 'Year']]
+        for tr in trans:
+            amount = float(tr.get('amount', 0))
+            data.append([tr['full_date'], f"{amount:,.0f}", tr['month_name'], str(tr['year'])])
     else:
-        member_panel()
+        trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
+        mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
+        if len(trans_df) > 0 and len(mem_df) > 0:
+            merged = trans_df.merge(mem_df[['id', 'name']], left_on='member_id', right_on='id')
+            merged = merged.sort_values(['year', 'month', 'day'], ascending=[False, False, False]).head(100)
+            data = [['Date', 'Member', 'Amount', 'Month', 'Year']]
+            for _, tr in merged.iterrows():
+                amount = float(tr['amount'])
+                data.append([tr['full_date'], tr['name'], f"{amount:,.0f}", tr['month_name'], str(tr['year'])])
+        else:
+            data = []
+    
+    if data:
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a5276')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+# ==================== এডমিন প্যানেল ====================
+def admin_login_page():
+    apply_dark_theme()
+    total = get_total_savings()
+    st.markdown(f"""
+    <div class="somiti-header"><h1>🌾 {SOMITI_NAME} 🌾</h1><p>{t('সঞ্চয় ও ঋণ ব্যবস্থাপনা', 'Savings & Loan Management')}</p></div>
+    <div class="total-box"><h2>💰 {total:,.0f} {t('টাকা', 'Taka')}</h2><p>{t('মোট জমা', 'Total Savings')}</p></div>
+    """, unsafe_allow_html=True)
+    st.markdown(f"### 🔐 {t('এডমিন লগইন', 'Admin Login')}")
+    phone = st.text_input(f"📱 {t('মোবাইল নম্বর', 'Mobile')}", placeholder="017XXXXXXXX")
+    password = st.text_input(f"🔑 {t('পাসওয়ার্ড', 'Password')}", type="password")
+    if st.button(t("প্রবেশ করুন", "Login"), use_container_width=True, type="primary"):
+        if phone == ADMIN_MOBILE and password == ADMIN_PASSWORD:
+            st.session_state.admin_logged_in = True
+            st.rerun()
+        else:
+            st.error(t("❌ ভুল মোবাইল বা পাসওয়ার্ড", "❌ Wrong mobile or password"))
+
+def admin_panel():
+    apply_dark_theme()
+    show_admin_header()
+    with st.sidebar:
+        st.markdown("### 🌐 " + t("ভাষা", "Language"))
+        language = st.radio(
+            t("ভাষা নির্বাচন করুন", "Select Language"),
+            options=["🇧🇩 বাংলা", "🇬🇧 English"],
+            index=0 if st.session_state.language == 'bn' else 1,
+            label_visibility="collapsed",
+            key="language_selector"
+        )
+        new_lang = 'bn' if language == "🇧🇩 বাংলা" else 'en'
+        if new_lang != st.session_state.language:
+            st.session_state.language = new_lang
+            st.rerun()
+        st.markdown("---")
+        st.markdown(f"### 📋 {t('এডমিন মেনু', 'Admin Menu')}")
+        st.caption(f"👑 {ADMIN_MOBILE}")
+        menu = st.radio(
+            t("নির্বাচন করুন", "Select"),
+            [
+                f"🏠 {t('ড্যাশবোর্ড', 'Dashboard')}",
+                f"➕ {t('নতুন সদস্য', 'New Member')}",
+                f"✏️ {t('সদস্য ব্যবস্থাপনা', 'Manage Members')}",
+                f"💵 {t('টাকা জমা', 'Deposit')}",
+                f"💰 {t('লেনদেন ব্যবস্থাপনা', 'Transactions')}",
+                f"🔗 {t('সদস্য লিংক', 'Member Links')}",
+                f"💸 {t('খরচ ব্যবস্থাপনা', 'Expenses')}",
+                f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}",
+                f"📊 {t('রিপোর্ট', 'Reports')}",
+                f"📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}",
+                f"📧 {t('ইমেইল টেস্ট', 'Email Test')}",
+                f"🎲 {t('লটারি', 'Lottery')}",
+                f"🚪 {t('লগআউট', 'Logout')}"
+            ],
+            label_visibility="collapsed"
+        )
+    
+    if f"🚪 {t('লগআউট', 'Logout')}" in menu:
+        if 'admin_logged_in' in st.session_state:
+            del st.session_state.admin_logged_in
+        st.rerun()
+    
+    elif f"🏠 {t('ড্যাশবোর্ড', 'Dashboard')}" in menu:
+        st.markdown(f"### 🏠 {t('এডমিন ড্যাশবোর্ড', 'Admin Dashboard')}")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        members = get_all_members()
+        total_members = len([m for m in members if m.get('status') == 'active'])
+        total_savings = get_total_savings()
+        this_month = get_current_month_collection()
+        unpaid_count = len(get_unpaid_members())
+        
+        with col1:
+            st.markdown(f"""<div class="kpi-card"><h3>👥 {t('সদস্য', 'Members')}</h3><h2>{total_members}</h2></div>""", unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"""<div class="kpi-card"><h3>💰 {t('মোট জমা', 'Total')}</h3><h2>{total_savings:,.0f}</h2></div>""", unsafe_allow_html=True)
+        with col3:
+            st.markdown(f"""<div class="kpi-card"><h3>📅 {t('এই মাস', 'This Month')}</h3><h2>{this_month:,.0f}</h2></div>""", unsafe_allow_html=True)
+        with col4:
+            st.markdown(f"""<div class="kpi-card"><h3>⚠️ {t('বকেয়া', 'Due')}</h3><h2>{unpaid_count}</h2></div>""", unsafe_allow_html=True)
+    
+    elif f"➕ {t('নতুন সদস্য', 'New Member')}" in menu:
+        st.markdown(f"### ➕ {t('নতুন সদস্য নিবন্ধন', 'New Member Registration')}")
+        name = st.text_input(f"{t('নাম', 'Name')} *")
+        phone = st.text_input(f"{t('মোবাইল', 'Mobile')} *", placeholder="017XXXXXXXX")
+        email = st.text_input(f"📧 {t('ইমেইল', 'Email')}")
+        monthly = st.number_input(f"{t('মাসিক কিস্তি', 'Monthly')} ({t('টাকা', 'Taka')})", value=500, step=50)
+        if st.button(f"✅ {t('সদস্য যোগ করুন', 'Add Member')}", type="primary"):
+            if name and phone:
+                member_id = add_member({
+                    'name': name, 'phone': phone, 'email': email,
+                    'password': generate_password(), 'monthly_savings': monthly
+                })
+                password = generate_password()
+                update_member(member_id, {'password': password})
+                st.success(f"✅ {t('সদস্য তৈরি', 'Member created')}!")
+                st.info(f"{t('আইডি', 'ID')}: {member_id} | {t('পাস', 'Pass')}: {password}")
+                st.balloons()
+            else:
+                st.error(t("❌ নাম ও মোবাইল আবশ্যক", "❌ Name and mobile required"))
+    
+    elif f"✏️ {t('সদস্য ব্যবস্থাপনা', 'Manage Members')}" in menu:
+        st.markdown(f"### ✏️ {t('সদস্য ব্যবস্থাপনা', 'Member Management')}")
+        members = get_all_members()
+        if members:
+            # টেবিল আকারে দেখান
+            table_data = []
+            for m in members:
+                table_data.append({
+                    t('আইডি', 'ID'): m['id'],
+                    t('নাম', 'Name'): m['name'],
+                    t('মোবাইল', 'Mobile'): m['phone'],
+                    t('কিস্তি', 'Monthly'): f"{float(m.get('monthly_savings', 500)):,.0f}",
+                    t('জমা', 'Savings'): f"{float(m.get('total_savings', 0)):,.0f}",
+                    t('স্ট্যাটাস', 'Status'): m.get('status', 'active')
+                })
+            df = pd.DataFrame(table_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            st.markdown(f"#### ✏️ {t('সদস্য এডিট/ডিলিট', 'Edit/Delete Member')}")
+            for m in members:
+                with st.expander(f"👤 {m['name']} ({m['id']})"):
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        if st.button(f"📝 {t('এডিট', 'Edit')}", key=f"e_{m['id']}"):
+                            st.session_state[f"edit_{m['id']}"] = True
+                    with col2:
+                        if st.button(f"🔐 {t('পাসওয়ার্ড', 'Password')}", key=f"p_{m['id']}"):
+                            st.session_state[f"pass_{m['id']}"] = True
+                    with col3:
+                        new_status = 'inactive' if m.get('status') == 'active' else 'active'
+                        btn_text = t('নিষ্ক্রিয়', 'Inactive') if m.get('status') == 'active' else t('সক্রিয়', 'Active')
+                        if st.button(f"🔄 {btn_text}", key=f"s_{m['id']}"):
+                            update_member(m['id'], {'status': new_status})
+                            st.rerun()
+                    with col4:
+                        if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{m['id']}"):
+                            st.session_state[f"delete_{m['id']}"] = True
+                    
+                    if st.session_state.get(f"delete_{m['id']}"):
+                        st.warning(f"⚠️ {t('আপনি কি নিশ্চিত?', 'Are you sure?')}")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"confirm_{m['id']}"):
+                                delete_member(m['id'])
+                                st.success(f"✅ {t('ডিলিট', 'Deleted')}!")
+                                del st.session_state[f"delete_{m['id']}"]
+                                st.rerun()
+                        with c2:
+                            if st.button(f"❌ {t('না', 'No')}", key=f"cancel_{m['id']}"):
+                                del st.session_state[f"delete_{m['id']}"]
+                                st.rerun()
+                    
+                    if st.session_state.get(f"edit_{m['id']}"):
+                        with st.form(f"edit_{m['id']}"):
+                            new_name = st.text_input(t("নাম", "Name"), value=m['name'])
+                            new_phone = st.text_input(t("মোবাইল", "Mobile"), value=m['phone'])
+                            new_email = st.text_input(t("ইমেইল", "Email"), value=m.get('email', ''))
+                            new_mon = st.number_input(t("কিস্তি", "Monthly"), value=float(m.get('monthly_savings', 500)), step=50.0)
+                            if st.form_submit_button("💾"):
+                                update_member(m['id'], {
+                                    'name': new_name, 'phone': new_phone,
+                                    'email': new_email, 'monthly_savings': new_mon
+                                })
+                                st.success("✅")
+                                del st.session_state[f"edit_{m['id']}"]
+                                st.rerun()
+                    
+                    if st.session_state.get(f"pass_{m['id']}"):
+                        if st.button(f"✅ {t('নতুন পাসওয়ার্ড', 'New')}", key=f"gen_{m['id']}"):
+                            new_pass = generate_password()
+                            update_member(m['id'], {'password': new_pass})
+                            st.success(f"✅ {t('নতুন পাস', 'New')}: {new_pass}")
+                            del st.session_state[f"pass_{m['id']}"]
+                            st.rerun()
+        else:
+            st.info(t("কোনো সদস্য নেই", "No members"))
+    
+    elif f"💵 {t('টাকা জমা', 'Deposit')}" in menu:
+        st.markdown(f"### 💵 {t('সদস্যের টাকা জমা', 'Member Deposit')}")
+        tab1, tab2 = st.tabs([f"✅ {t('জমা দিয়েছে', 'Paid')}", f"❌ {t('জমা দেয়নি', 'Unpaid')}"])
+        
+        with tab1:
+            paid = get_paid_members()
+            if paid:
+                table_data = []
+                for pm in paid:
+                    table_data.append({
+                        t('নাম', 'Name'): pm['name'],
+                        t('আইডি', 'ID'): pm['id'],
+                        t('মোবাইল', 'Mobile'): pm['phone'],
+                        t('জমা', 'Savings'): f"{float(pm.get('total_savings', 0)):,.0f}"
+                    })
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info(t("কেউ জমা দেয়নি", "No one paid"))
+        
+        with tab2:
+            unpaid = get_unpaid_members()
+            if unpaid:
+                for um in unpaid:
+                    savings_val = float(um.get('total_savings', 0))
+                    monthly_val = float(um.get('monthly_savings', 500))
+                    with st.expander(f"❌ {um['name']} ({um['id']})"):
+                        deposit_date = st.date_input(t("জমার তারিখ", "Date"), datetime.now(), key=f"date_{um['id']}")
+                        day = deposit_date.day
+                        month = deposit_date.month
+                        year = deposit_date.year
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            months_count = st.number_input(t("কত মাস", "Months"), 1, 12, 1, key=f"count_{um['id']}")
+                        with c2:
+                            late_fee = st.number_input(t("লেট ফি", "Late Fee"), 0.0, step=10.0, key=f"fee_{um['id']}")
+                        total = monthly_val * months_count + late_fee
+                        
+                        if st.button(f"✅ {t('জমা নিন', 'Deposit')}", key=f"dep_{um['id']}", type="primary"):
+                            today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            full_date = f"{day} {BANGLA_MONTHS[month]} {year}"
+                            full_date_en = f"{day} {ENGLISH_MONTHS[month]} {year}"
+                            date_iso = f"{year}-{month:02d}-{day:02d}"
+                            
+                            for i in range(int(months_count)):
+                                add_transaction({
+                                    'member_id': um['id'], 'amount': monthly_val, 'transaction_type': 'deposit',
+                                    'day': day, 'month': month, 'year': year,
+                                    'month_name': BANGLA_MONTHS[month], 'month_name_en': ENGLISH_MONTHS[month],
+                                    'full_date': full_date, 'full_date_en': full_date_en, 'date_iso': date_iso,
+                                    'late_fee': late_fee if i == 0 else 0, 'created_at': today_str
+                                })
+                            
+                            new_savings = savings_val + total
+                            update_member(um['id'], {'total_savings': new_savings})
+                            
+                            st.success(f"✅ {total:,.0f} {t('টাকা জমা হয়েছে', 'deposited')}!")
+                            st.balloons()
+                            time.sleep(1)
+                            st.rerun()
+            else:
+                st.success(f"🎉 {t('সবাই জমা দিয়েছেন', 'All paid')}!")
+    
+    elif f"💰 {t('লেনদেন ব্যবস্থাপনা', 'Transactions')}" in menu:
+        st.markdown(f"### 💰 {t('লেনদেন ব্যবস্থাপনা', 'Transaction Management')}")
+        members = get_all_members()
+        if members:
+            options = {f"{m['name']} ({m['id']})": m['id'] for m in members}
+            selected = st.selectbox(t("সদস্য নির্বাচন", "Select Member"), list(options.keys()))
+            if selected:
+                member_id = options[selected]
+                member = get_member_by_id(member_id)
+                if member:
+                    st.success(f"👤 {member['name']} | 💰 {float(member.get('total_savings', 0)):,.0f} {t('টাকা', 'Taka')}")
+                    trans = get_member_transactions(member_id)
+                    if trans:
+                        table_data = []
+                        for tr in trans:
+                            table_data.append({
+                                t('তারিখ', 'Date'): tr['full_date'],
+                                t('পরিমাণ', 'Amount'): f"{float(tr['amount']):,.0f}",
+                                t('মাস', 'Month'): tr['month_name'],
+                                t('সাল', 'Year'): str(tr['year']),
+                                t('লেট ফি', 'Late Fee'): f"{float(tr.get('late_fee', 0)):,.0f}"
+                            })
+                        df = pd.DataFrame(table_data)
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("---")
+                        st.markdown(f"#### ✏️ {t('লেনদেন এডিট/ডিলিট', 'Edit/Delete')}")
+                        for tr in trans:
+                            col1, col2, col3 = st.columns([4, 1, 1])
+                            with col1:
+                                st.write(f"{tr['full_date']} - {float(tr['amount']):,.0f} {t('টাকা', 'Taka')}")
+                            with col2:
+                                if st.button("✏️", key=f"edit_{tr['id']}"):
+                                    st.session_state[f"edit_trans_{tr['id']}"] = True
+                            with col3:
+                                if st.button("🗑️", key=f"del_{tr['id']}"):
+                                    st.session_state[f"confirm_del_{tr['id']}"] = True
+                            
+                            if st.session_state.get(f"confirm_del_{tr['id']}"):
+                                st.warning(t("নিশ্চিত?", "Confirm?"))
+                                cy, cn = st.columns(2)
+                                with cy:
+                                    if st.button("✅", key=f"yes_{tr['id']}"):
+                                        current_savings = float(member.get('total_savings', 0))
+                                        update_member(member_id, {'total_savings': current_savings - float(tr['amount'])})
+                                        delete_transaction(tr['id'])
+                                        st.success("✅")
+                                        del st.session_state[f"confirm_del_{tr['id']}"]
+                                        st.rerun()
+                                with cn:
+                                    if st.button("❌", key=f"no_{tr['id']}"):
+                                        del st.session_state[f"confirm_del_{tr['id']}"]
+                                        st.rerun()
+                            
+                            if st.session_state.get(f"edit_trans_{tr['id']}"):
+                                with st.form(f"edit_{tr['id']}"):
+                                    new_amt = st.number_input(t("টাকা", "Amount"), value=float(tr['amount']), step=50.0)
+                                    if st.form_submit_button("💾"):
+                                        diff = new_amt - float(tr['amount'])
+                                        current_savings = float(member.get('total_savings', 0))
+                                        update_member(member_id, {'total_savings': current_savings + diff})
+                                        update_transaction(tr['id'], {'amount': new_amt})
+                                        st.success("✅")
+                                        del st.session_state[f"edit_trans_{tr['id']}"]
+                                        st.rerun()
+                    else:
+                        st.info(t("কোনো লেনদেন নেই", "No transactions"))
+        else:
+            st.info(t("কোনো সদস্য নেই", "No members"))
+    
+    elif f"🔗 {t('সদস্য লিংক', 'Member Links')}" in menu:
+        st.markdown(f"### 🔗 {t('সদস্য লিংক', 'Member Links')}")
+        members = get_all_members()
+        app_url = get_app_url()
+        for m in members:
+            link = f"{app_url}/?member={m['id']}"
+            st.markdown(f"""
+            <div class="member-card">
+                <h4>👤 {m['name']} ({m['id']})</h4>
+                <p>📱 {m['phone']} | 🔑 {m['password']}</p>
+                <p>🔗 <code>{link}</code></p>
+            </div>""", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{link}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("লিংক কপি", "Copy Link")}</button>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{m["password"]}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("পাসওয়ার্ড কপি", "Copy Pass")}</button>', unsafe_allow_html=True)
+            st.markdown("---")
+    
+    elif f"💸 {t('খরচ ব্যবস্থাপনা', 'Expenses')}" in menu:
+        st.markdown(f"### 💸 {t('খরচ ব্যবস্থাপনা', 'Expense Management')}")
+        tab1, tab2 = st.tabs([f"➕ {t('নতুন খরচ', 'New')}", f"📋 {t('তালিকা', 'List')}"])
+        with tab1:
+            with st.form("exp_form"):
+                desc = st.text_input(t("বিবরণ", "Description"))
+                amt = st.number_input(t("টাকা", "Amount"), 0.0, step=10.0)
+                cat = st.selectbox(t("ক্যাটাগরি", "Category"), ["অফিস", "চা-নাস্তা", "স্টেশনারি", "পরিবহন", "অন্যান্য"])
+                if st.form_submit_button("💾"):
+                    if desc and amt > 0:
+                        add_expense({'description': desc, 'amount': amt, 'date': datetime.now().strftime("%Y-%m-%d"), 'category': cat})
+                        st.success(f"✅ {amt:,.0f} {t('টাকা যোগ', 'Added')}!")
+                        st.rerun()
+        with tab2:
+            expenses = get_all_expenses()
+            if expenses:
+                table_data = []
+                for exp in expenses[:50]:
+                    table_data.append({
+                        t('তারিখ', 'Date'): exp['date'],
+                        t('ক্যাটাগরি', 'Category'): exp['category'],
+                        t('বিবরণ', 'Description'): exp['description'][:40],
+                        t('পরিমাণ', 'Amount'): f"{float(exp['amount']):,.0f}"
+                    })
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                st.markdown("---")
+                for exp in expenses[:50]:
+                    col1, col2 = st.columns([5, 1])
+                    with col1:
+                        st.write(f"{exp['date']} - {exp['description']} - {float(exp['amount']):,.0f}")
+                    with col2:
+                        if st.button("🗑️", key=f"de_{exp['id']}"):
+                            delete_expense(exp['id'])
+                            st.rerun()
+                
+                total_exp = sum(float(e['amount']) for e in expenses)
+                st.metric(f"📊 {t('মোট খরচ', 'Total')}", f"{total_exp:,.0f}")
+    
+    elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
+        st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
+        cash = get_cash_balance()
+        fund_balance = get_fund_balance()
+        st.info(f"💰 {t('ক্যাশ ব্যালেন্স', 'Cash')}: {cash:,.0f} | 🏦 {t('ফান্ড', 'Fund')}: {fund_balance:,.0f}")
+        
+        tab1, tab2, tab3 = st.tabs([f"➕ {t('জমা', 'Deposit')}", f"➖ {t('উত্তোলন', 'Withdrawal')}", f"📋 {t('ইতিহাস', 'History')}"])
+        
+        with tab1:
+            with st.form("fund_deposit"):
+                amount = st.number_input(t("পরিমাণ", "Amount"), 0.0, step=100.0)
+                desc = st.text_area(t("বিবরণ", "Description"))
+                if st.form_submit_button("✅"):
+                    if amount > 0 and desc:
+                        add_fund_transaction({
+                            'type': 'deposit', 'amount': amount, 'description': desc,
+                            'date': datetime.now().strftime("%Y-%m-%d"),
+                            'previous_balance': fund_balance, 'current_balance': fund_balance + amount,
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        st.success(f"✅ {amount:,.0f} {t('জমা', 'deposited')}!")
+                        st.balloons()
+                        time.sleep(1)
+                        st.rerun()
+        
+        with tab2:
+            with st.form("fund_withdraw"):
+                amount = st.number_input(t("পরিমাণ", "Amount"), 0.0, step=100.0)
+                desc = st.text_area(t("বিবরণ", "Description"))
+                date = st.date_input(t("তারিখ", "Date"), datetime.now())
+                if st.form_submit_button("✅"):
+                    if amount > 0 and amount <= fund_balance and desc:
+                        add_fund_transaction({
+                            'type': 'withdrawal', 'amount': amount, 'description': desc,
+                            'date': date.strftime("%Y-%m-%d"),
+                            'previous_balance': fund_balance, 'current_balance': fund_balance - amount,
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        add_withdrawal({
+                            'date': date.strftime("%Y-%m-%d"), 'amount': amount, 'description': desc,
+                            'withdrawn_by': 'Admin', 'previous_balance': fund_balance, 'current_balance': fund_balance - amount,
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        st.success(f"✅ {amount:,.0f} {t('উত্তোলন', 'withdrawn')}!")
+                        st.rerun()
+                    else:
+                        st.error(t("❌ সঠিক পরিমাণ দিন", "❌ Invalid amount"))
+        
+        with tab3:
+            fund_trans = get_fund_transactions()
+            if fund_trans:
+                table_data = []
+                for ft in fund_trans[:30]:
+                    table_data.append({
+                        t('তারিখ', 'Date'): ft['date'],
+                        t('ধরন', 'Type'): "➕ জমা" if ft['type'] == 'deposit' else "➖ উত্তোলন",
+                        t('পরিমাণ', 'Amount'): f"{float(ft['amount']):,.0f}",
+                        t('বিবরণ', 'Description'): ft['description'][:30],
+                        t('ব্যালেন্স', 'Balance'): f"{float(ft['current_balance']):,.0f}"
+                    })
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info(t("কোনো লেনদেন নেই", "No transactions"))
+    
+    elif f"📊 {t('রিপোর্ট', 'Reports')}" in menu:
+        st.markdown(f"### 📊 {t('রিপোর্ট', 'Reports')}")
+        tab1, tab2 = st.tabs([f"📈 {t('মাসিক', 'Monthly')}", f"⚠️ {t('বকেয়া', 'Due')}"])
+        with tab1:
+            monthly = get_monthly_report()
+            if monthly:
+                df = pd.DataFrame(monthly)
+                df['amount'] = df['amount'].apply(lambda x: f"{float(x):,.0f}")
+                df.columns = [t('মাস', 'Month'), t('জমা', 'Collection')]
+                st.bar_chart(df.set_index(t('মাস', 'Month')))
+                st.dataframe(df, use_container_width=True, hide_index=True)
+        with tab2:
+            unpaid = get_unpaid_members()
+            if unpaid:
+                table_data = []
+                for mu in unpaid:
+                    table_data.append({
+                        t('নাম', 'Name'): mu['name'],
+                        t('মোবাইল', 'Mobile'): mu['phone'],
+                        t('কিস্তি', 'Monthly'): f"{float(mu.get('monthly_savings', 500)):,.0f}",
+                        t('জমা', 'Savings'): f"{float(mu.get('total_savings', 0)):,.0f}"
+                    })
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    elif f"📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}" in menu:
+        st.markdown(f"### 📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}")
+        report_type = st.selectbox(t("রিপোর্ট", "Report"), ["সদস্য তালিকা", "সব লেনদেন", "নির্দিষ্ট সদস্য"])
+        if "নির্দিষ্ট" in report_type:
+            members = get_all_members()
+            if members:
+                options = {f"{m['name']} ({m['id']})": m['id'] for m in members}
+                selected = st.selectbox(t("সদস্য", "Member"), list(options.keys()))
+                if st.button("📥 PDF", type="primary"):
+                    pdf = generate_pdf_transactions(options[selected])
+                    st.download_button("📥 Download", pdf, f"{options[selected]}_transactions.pdf", "application/pdf")
+        else:
+            if st.button("📥 PDF", type="primary"):
+                if "সদস্য" in report_type:
+                    pdf = generate_pdf_member_list()
+                    st.download_button("📥 Download", pdf, "member_list.pdf", "application/pdf")
+                else:
+                    pdf = generate_pdf_transactions()
+                    st.download_button("📥 Download", pdf, "all_transactions.pdf", "application/pdf")
+    
+    elif f"📧 {t('ইমেইল টেস্ট', 'Email Test')}" in menu:
+        st.markdown(f"### 📧 {t('ইমেইল টেস্ট', 'Email Test')}")
+        test_email = st.text_input(t("ইমেইল", "Email"), placeholder="example@gmail.com")
+        if st.button("📨 টেস্ট", type="primary"):
+            if send_test_email(test_email):
+                st.success("✅ পাঠানো হয়েছে!")
+            else:
+                st.error("❌ ব্যর্থ")
+    
+    elif f"🎲 {t('লটারি', 'Lottery')}" in menu:
+        st.markdown(f"### 🎲 {t('লটারি', 'Lottery')}")
+        if st.button("🎲 বিজয়ী নির্বাচন", type="primary"):
+            winner = pick_lottery_winner()
+            if winner:
+                st.balloons()
+                st.success(f"🎉 {winner['name']} ({winner['id']})")
+            else:
+                st.error("কোনো সদস্য নেই")
+
+# ==================== মেম্বার প্যানেল ====================
+def member_login_page(member_id):
+    apply_dark_theme()
+    member = get_member_by_id(member_id)
+    if not member:
+        st.error(t("❌ সদস্য পাওয়া যায়নি", "❌ Member not found"))
+        return
+    st.markdown(f"""
+    <div class="somiti-header">
+        <h1>🌾 {SOMITI_NAME} 🌾</h1>
+        <p>{t('সদস্য লগইন', 'Member Login')}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown(f"### 🔐 {t('স্বাগতম', 'Welcome')}, {member['name']}")
+    email = st.text_input(f"📧 {t('ইমেইল', 'Email')}")
+    password = st.text_input(f"🔑 {t('পাসওয়ার্ড', 'Password')}", type="password")
+    if st.button(t("প্রবেশ করুন", "Login"), type="primary"):
+        if email == member.get('email') and password == member.get('password'):
+            st.session_state.member_logged_in = True
+            st.session_state.member_id = member_id
+            st.rerun()
+        else:
+            st.error(t("❌ ভুল ইমেইল বা পাসওয়ার্ড", "❌ Wrong email or password"))
+
+def member_dashboard_view():
+    apply_dark_theme()
+    member = get_member_by_id(st.session_state.member_id)
+    if not member:
+        st.error("Member not found")
+        return
+    
+    total_savings = float(member.get('total_savings', 0))
+    monthly = float(member.get('monthly_savings', 500))
+    
+    st.markdown(f"""
+    <div class="somiti-header">
+        <h1>🌾 {SOMITI_NAME} 🌾</h1>
+        <p>{t('সদস্য ড্যাশবোর্ড', 'Member Dashboard')}</p>
+    </div>
+    <div class="total-box">
+        <h2>💰 {total_savings:,.0f} {t('টাকা', 'Taka')}</h2>
+        <p>{t('আপনার মোট জমা', 'Your Total Savings')}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.sidebar:
+        st.markdown(f"### 👤 {member['name']}")
+        st.caption(f"🆔 {member['id']} | 📱 {member['phone']}")
+        if st.button(f"🚪 {t('লগআউট', 'Logout')}"):
+            del st.session_state.member_logged_in
+            del st.session_state.member_id
+            st.rerun()
+    
+    tab1, tab2, tab3 = st.tabs(["📊 ড্যাশবোর্ড", "🔐 পাসওয়ার্ড", "📥 রিপোর্ট"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        col1.metric("বর্তমান জমা", f"{total_savings:,.0f} টাকা")
+        col2.metric("মাসিক কিস্তি", f"{monthly:,.0f} টাকা")
+        
+        current = datetime.now()
+        trans = get_member_transactions(member['id'])
+        paid = sum(float(t['amount']) for t in trans if t['month'] == current.month and t['year'] == current.year)
+        
+        if paid >= monthly:
+            st.success(f"✅ {BANGLA_MONTHS[current.month]} {current.year} মাসের কিস্তি পরিশোধ করেছেন")
+        else:
+            st.warning(f"⚠️ বকেয়া: {monthly - paid:,.0f} টাকা")
+        
+        st.markdown("---")
+        st.markdown("#### 📋 লেনদেন ইতিহাস")
+        if trans:
+            table_data = []
+            for tr in trans[:20]:
+                table_data.append({
+                    "তারিখ": tr['full_date'],
+                    "পরিমাণ": f"{float(tr['amount']):,.0f}",
+                    "মাস": tr['month_name']
+                })
+            df = pd.DataFrame(table_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    with tab2:
+        new_pass = st.text_input("নতুন পাসওয়ার্ড", type="password")
+        confirm = st.text_input("নিশ্চিত করুন", type="password")
+        if st.button("আপডেট", type="primary"):
+            if new_pass and new_pass == confirm:
+                update_member(member['id'], {'password': new_pass})
+                st.success("✅ পরিবর্তন হয়েছে!")
+            else:
+                st.error("❌ পাসওয়ার্ড মিলছে না")
+    
+    with tab3:
+        if st.button("📥 পিডিএফ ডাউনলোড", type="primary"):
+            pdf = generate_pdf_transactions(member['id'])
+            st.download_button("📥 Download PDF", pdf, f"{member['id']}_transactions.pdf", "application/pdf")
+
+# ==================== মেইন ====================
+def main():
+    check_and_archive_old_data()
+    
+    if 'member_logged_in' not in st.session_state:
+        st.session_state.member_logged_in = False
+    if 'admin_logged_in' not in st.session_state:
+        st.session_state.admin_logged_in = False
+    if 'language' not in st.session_state:
+        st.session_state.language = 'bn'
+    
+    if member_login_id:
+        if not st.session_state.member_logged_in:
+            member_login_page(member_login_id)
+        else:
+            member_dashboard_view()
+        return
+    
+    if not st.session_state.admin_logged_in:
+        admin_login_page()
+    else:
+        admin_panel()
 
 if __name__ == "__main__":
     main()
