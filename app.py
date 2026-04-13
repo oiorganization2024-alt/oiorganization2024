@@ -56,8 +56,12 @@ ENGLISH_MONTHS = {
 def init_database():
     conn = sqlite3.connect('somiti.db')
     c = conn.cursor()
+    
+    # settings
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_date', ?)", (SOMITI_START_DATE,))
+    
+    # members
     c.execute('''
         CREATE TABLE IF NOT EXISTS members (
             id TEXT PRIMARY KEY,
@@ -75,6 +79,8 @@ def init_database():
         c.execute("ALTER TABLE members ADD COLUMN email TEXT")
     except:
         pass
+    
+    # transactions (note কলাম ছাড়া)
     c.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +103,8 @@ def init_database():
         c.execute("ALTER TABLE transactions DROP COLUMN note")
     except:
         pass
+    
+    # expenses
     c.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +114,8 @@ def init_database():
             category TEXT
         )
     ''')
+    
+    # withdrawals
     c.execute('''
         CREATE TABLE IF NOT EXISTS withdrawals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,6 +128,8 @@ def init_database():
             created_at TEXT NOT NULL
         )
     ''')
+    
+    # fund_transactions
     c.execute('''
         CREATE TABLE IF NOT EXISTS fund_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +142,7 @@ def init_database():
             created_at TEXT NOT NULL
         )
     ''')
+    
     conn.commit()
     conn.close()
 
@@ -160,7 +173,7 @@ def check_and_archive_old_data():
     except:
         pass
 
-# ==================== ইমেইল টেস্ট ফাংশন (শুধু টেস্টের জন্য) ====================
+# ==================== ইমেইল টেস্ট ফাংশন ====================
 def send_test_email(to_email):
     """শুধুমাত্র ইমেইল টেস্ট মেনু থেকে কল করা হবে"""
     if not to_email or '@' not in str(to_email):
@@ -246,8 +259,24 @@ def get_total_withdrawals():
     except:
         return 0.0
 
+def get_fund_balance():
+    try:
+        conn = sqlite3.connect('somiti.db')
+        c = conn.cursor()
+        c.execute("""
+            SELECT 
+                IFNULL(SUM(CASE WHEN type='deposit' THEN amount ELSE 0 END), 0) -
+                IFNULL(SUM(CASE WHEN type='withdrawal' THEN amount ELSE 0 END), 0)
+            FROM fund_transactions
+        """)
+        balance = c.fetchone()[0] or 0
+        conn.close()
+        return float(balance)
+    except:
+        return 0.0
+
 def get_cash_balance():
-    return get_total_savings() - get_total_expenses() - get_total_withdrawals()
+    return get_total_savings() + get_fund_balance() - get_total_expenses() - get_total_withdrawals()
 
 def get_paid_members():
     try:
@@ -756,22 +785,38 @@ def admin_panel():
                         with c2:
                             late_fee = st.number_input(t("লেট ফি", "Late Fee"), 0.0, step=10.0, key=f"fee_{um[0]}")
                         total = monthly_val * months_count + late_fee
+                        
                         if st.button(f"✅ {t('জমা নিন', 'Deposit')}", key=f"dep_{um[0]}", type="primary"):
                             today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             full_date = f"{day} {BANGLA_MONTHS[month]} {year}"
                             full_date_en = f"{day} {ENGLISH_MONTHS[month]} {year}"
                             date_iso = f"{year}-{month:02d}-{day:02d}"
+                            
                             conn = sqlite3.connect('somiti.db')
                             c = conn.cursor()
+                            
+                            # ১. ট্রানজেকশন এন্ট্রি
                             for i in range(int(months_count)):
                                 c.execute("""
                                     INSERT INTO transactions 
                                     (member_id, amount, transaction_type, day, month, year, month_name, month_name_en, full_date, full_date_en, date_iso, late_fee, created_at)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (um[0], monthly_val, 'deposit', day, month, year, BANGLA_MONTHS[month], ENGLISH_MONTHS[month], full_date, full_date_en, date_iso, late_fee if i == 0 else 0, today_str))
-                            c.execute("UPDATE members SET total_savings = IFNULL(total_savings, 0) + ? WHERE id = ?", (total, um[0]))
+                                """, (
+                                    um[0], monthly_val, 'deposit', day, month, year, 
+                                    BANGLA_MONTHS[month], ENGLISH_MONTHS[month],
+                                    full_date, full_date_en, date_iso, 
+                                    late_fee if i == 0 else 0, today_str
+                                ))
+                            
+                            # ২. ব্যালেন্স আপডেট (ফিক্সড)
+                            c.execute("SELECT total_savings FROM members WHERE id = ?", (um[0],))
+                            current_savings = c.fetchone()[0] or 0
+                            new_savings = float(current_savings) + total
+                            c.execute("UPDATE members SET total_savings = ? WHERE id = ?", (new_savings, um[0]))
+                            
                             conn.commit()
                             conn.close()
+                            
                             st.success(f"✅ {total:,.0f} {t('টাকা জমা হয়েছে', 'Taka deposited')}!")
                             st.balloons()
                             time.sleep(1)
@@ -904,11 +949,13 @@ def admin_panel():
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
         st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
         cash = get_cash_balance()
+        fund_balance = get_fund_balance()
         st.info(f"💰 {t('বর্তমান ক্যাশ ব্যালেন্স', 'Current Balance')}: {cash:,.0f} {t('টাকা', 'Taka')}")
+        st.info(f"🏦 {t('ফান্ড ব্যালেন্স', 'Fund Balance')}: {fund_balance:,.0f} {t('টাকা', 'Taka')}")
         
         tab1, tab2, tab3 = st.tabs([
-            f"➕ {t('টাকা জমা', 'Deposit')}",
-            f"➖ {t('টাকা উত্তোলন', 'Withdrawal')}",
+            f"➕ {t('ফান্ডে জমা', 'Deposit to Fund')}",
+            f"➖ {t('ফান্ড থেকে উত্তোলন', 'Withdraw from Fund')}",
             f"📋 {t('ইতিহাস', 'History')}"
         ])
         
@@ -920,14 +967,28 @@ def admin_panel():
                     if amount > 0 and description:
                         conn = sqlite3.connect('somiti.db')
                         c = conn.cursor()
+                        
+                        # ফান্ড ট্রানজেকশন এন্ট্রি
                         c.execute("""
-                            INSERT INTO fund_transactions (type, amount, description, date, previous_balance, current_balance, created_at)
+                            INSERT INTO fund_transactions 
+                            (type, amount, description, date, previous_balance, current_balance, created_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, ('deposit', amount, description, datetime.now().strftime("%Y-%m-%d"), cash, cash + amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                        """, (
+                            'deposit', amount, description, 
+                            datetime.now().strftime("%Y-%m-%d"), 
+                            fund_balance, fund_balance + amount, 
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        ))
+                        
                         conn.commit()
                         conn.close()
-                        st.success(f"✅ {amount:,.0f} {t('টাকা জমা', 'deposited')}!")
+                        
+                        st.success(f"✅ {amount:,.0f} {t('টাকা ফান্ডে জমা হয়েছে', 'Taka deposited to fund')}!")
+                        st.balloons()
+                        time.sleep(1)
                         st.rerun()
+                    else:
+                        st.error(t("❌ পরিমাণ ও বিবরণ দিন", "❌ Enter amount and description"))
         
         with tab2:
             with st.form("fund_withdraw_form"):
@@ -935,23 +996,40 @@ def admin_panel():
                 description = st.text_area(t("বিবরণ", "Description"))
                 date = st.date_input(t("তারিখ", "Date"), datetime.now())
                 if st.form_submit_button(f"✅ {t('উত্তোলন করুন', 'Withdraw')}", type="primary"):
-                    if amount > 0 and amount <= cash and description:
+                    if amount > 0 and amount <= fund_balance and description:
                         conn = sqlite3.connect('somiti.db')
                         c = conn.cursor()
+                        
+                        # ফান্ড ট্রানজেকশন এন্ট্রি
                         c.execute("""
-                            INSERT INTO fund_transactions (type, amount, description, date, previous_balance, current_balance, created_at)
+                            INSERT INTO fund_transactions 
+                            (type, amount, description, date, previous_balance, current_balance, created_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, ('withdrawal', amount, description, date.strftime("%Y-%m-%d"), cash, cash - amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                        """, (
+                            'withdrawal', amount, description, 
+                            date.strftime("%Y-%m-%d"), 
+                            fund_balance, fund_balance - amount, 
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        ))
+                        
+                        # withdrawals টেবিলেও এন্ট্রি
                         c.execute("""
-                            INSERT INTO withdrawals (date, amount, description, withdrawn_by, previous_balance, current_balance, created_at)
+                            INSERT INTO withdrawals 
+                            (date, amount, description, withdrawn_by, previous_balance, current_balance, created_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (date.strftime("%Y-%m-%d"), amount, description, t("এডমিন", "Admin"), cash, cash - amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                        """, (
+                            date.strftime("%Y-%m-%d"), amount, description, 
+                            t("এডমিন", "Admin"), fund_balance, fund_balance - amount, 
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        ))
+                        
                         conn.commit()
                         conn.close()
-                        st.success(f"✅ {amount:,.0f} {t('টাকা উত্তোলন', 'Withdrawn')}!")
+                        
+                        st.success(f"✅ {amount:,.0f} {t('টাকা উত্তোলন করা হয়েছে', 'Taka withdrawn')}!")
                         st.rerun()
                     else:
-                        if amount > cash:
+                        if amount > fund_balance:
                             st.error(t("❌ পর্যাপ্ত ব্যালেন্স নেই", "❌ Insufficient balance"))
                         else:
                             st.error(t("❌ পরিমাণ ও বিবরণ দিন", "❌ Enter amount and description"))
