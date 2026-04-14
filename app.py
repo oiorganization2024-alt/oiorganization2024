@@ -266,16 +266,13 @@ def update_member(member_id, updates):
         return True
     return False
 
-# FIX #1: সদস্য ডিলিট - সঠিকভাবে str তুলনা করে ফিল্টার করবে
 def delete_member(member_id):
     member_id_str = str(member_id)
-    # ট্রানজেকশন ডিলিট
     trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
     if len(trans_df) > 0:
         trans_df['member_id'] = trans_df['member_id'].astype(str)
         trans_df = trans_df[trans_df['member_id'] != member_id_str]
         save_df(trans_df, TRANSACTIONS_CSV)
-    # মেম্বার ডিলিট
     mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
     if len(mem_df) > 0:
         mem_df['id'] = mem_df['id'].astype(str)
@@ -314,7 +311,6 @@ def add_expense(data):
     data['amount'] = int(data['amount'])
     append_row(EXPENSES_CSV, data, EXPENSE_COLS)
 
-# FIX #4: খরচ ডিলিট - শুধু রেকর্ড মুছবে, ব্যালেন্সে কিছু যোগ হবে না
 def delete_expense(exp_id):
     df = load_df(EXPENSES_CSV, EXPENSE_COLS)
     df = df[df['id'] != int(exp_id)]
@@ -337,7 +333,6 @@ def get_fund_transactions():
     df = df.sort_values('id', ascending=False)
     return df.to_dict('records')
 
-# FIX #5: ফান্ড উত্তোলন - ব্যালেন্স ০ বা কম হলে হবে না
 def add_fund_transaction(data):
     current_balance = get_fund_balance()
     if data['type'] == 'withdrawal':
@@ -577,7 +572,6 @@ def admin_panel():
             else:
                 st.error(t("❌ নাম ও মোবাইল আবশ্যক", "❌ Name and mobile required"))
 
-    # FIX #1: সদস্য ডিলিট সমস্যা ঠিক করা হয়েছে
     elif f"✏️ {t('সদস্য ব্যবস্থাপনা', 'Manage Members')}" in menu:
         st.markdown(f"### ✏️ {t('সদস্য ব্যবস্থাপনা', 'Member Management')}")
         members = get_all_members()
@@ -611,7 +605,6 @@ def admin_panel():
                         if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{member_id}"):
                             st.session_state[f"delete_confirm_{member_id}"] = True
 
-                    # FIX #1: কনফার্মেশন key আলাদা রাখা হয়েছে যাতে clash না হয়
                     if st.session_state.get(f"delete_confirm_{member_id}"):
                         st.warning(f"⚠️ {t('আপনি কি নিশ্চিত? এই সদস্যের সকল ডাটা মুছে যাবে!', 'Are you sure? All data will be deleted!')}")
                         c1, c2 = st.columns(2)
@@ -653,7 +646,6 @@ def admin_panel():
         else:
             st.info(t("কোনো সদস্য নেই", "No members"))
 
-    # FIX #2: জমা দেওয়া সদস্য তালিকা - লুকানো অবস্থায় থাকবে
     elif f"💵 {t('টাকা জমা', 'Deposit')}" in menu:
         st.markdown(f"### 💵 {t('সদস্যের টাকা জমা', 'Member Deposit')}")
         tab1, tab2 = st.tabs([f"✅ {t('জমা দিয়েছে', 'Paid')}", f"❌ {t('জমা দেয়নি', 'Unpaid')}"])
@@ -661,7 +653,6 @@ def admin_panel():
         with tab1:
             paid = get_paid_members()
             if paid:
-                # FIX #2: expanded=False দিয়ে ডিফল্ট লুকানো
                 with st.expander(f"📋 {t('জমা দেওয়া সদস্য তালিকা দেখুন', 'View Paid Members List')} ({len(paid)} জন)", expanded=False):
                     table_data = []
                     for pm in paid:
@@ -736,10 +727,8 @@ def admin_panel():
         st.markdown(f"### 💰 {t('লেনদেন ব্যবস্থাপনা', 'Transaction Management')}")
         members = get_all_members()
         if not members:
-            # ফাংশন ৭: খালি অবস্থায় মেসেজ
             st.info(t("কোনো সদস্য নেই", "No members found"))
         else:
-            # ফাংশন ১: সদস্য নির্বাচন ড্রপডাউন
             options = {f"{m['name']} ({m['id']})": str(m['id']) for m in members}
             selected = st.selectbox(t("👤 সদস্য নির্বাচন করুন", "Select Member"), list(options.keys()))
 
@@ -750,7 +739,6 @@ def admin_panel():
                     savings_val = int(float(member.get('total_savings', 0))) if member.get('total_savings') else 0
                     monthly_val = int(float(member.get('monthly_savings', 500))) if member.get('monthly_savings') else 500
 
-                    # ফাংশন ২: সদস্য তথ্য প্রদর্শন
                     st.markdown(f"""
                     <div style="background:#21262d; padding:12px 16px; border-radius:10px; border:1px solid #30363d; margin-bottom:12px;">
                         <b>👤 {member['name']}</b> &nbsp;|&nbsp; 🆔 {member['id']} &nbsp;|&nbsp;
@@ -763,7 +751,6 @@ def admin_panel():
                     trans = get_member_transactions(member_id)
 
                     if trans:
-                        # ফাংশন ৩: লেনদেন তালিকা — expander এ লুকানো
                         with st.expander(f"📋 {t('লেনদেন তালিকা দেখুন', 'View Transaction List')} ({len(trans)} টি)", expanded=False):
                             table_data = []
                             for tr in trans:
@@ -781,7 +768,6 @@ def admin_panel():
 
                         st.markdown(f"#### ✏️ {t('লেনদেন এডিট / ডিলিট', 'Edit / Delete Transactions')}")
 
-                        # ফাংশন ৪, ৫, ৬: এডিট, ডিলিট ও অটো ব্যালেন্স আপডেট
                         for tr in trans[:50]:
                             tr_id = tr['id']
                             amount = int(float(tr['amount'])) if tr.get('amount') else 0
@@ -789,7 +775,8 @@ def admin_panel():
 
                             col1, col2, col3 = st.columns([5, 1, 1])
                             with col1:
-                                st.write(f"📅 {tr.get('full_date',''')} — **{fmt(amount)}** {t('টাকা','Taka')} | {tr.get('month_name','')} {tr.get('year','')} | লেট ফি: {fmt(late_val)}")
+                                # FIXED: সঠিক কোটেশন ব্যবহার করা হয়েছে
+                                st.write(f"📅 {tr.get('full_date', '')} — **{fmt(amount)}** {t('টাকা','Taka')} | {tr.get('month_name', '')} {tr.get('year', '')} | লেট ফি: {fmt(late_val)}")
                             with col2:
                                 if st.button("✏️", key=f"et_{tr_id}", help=t("এডিট করুন","Edit")):
                                     st.session_state[f"edit_trans_{tr_id}"] = True
@@ -799,13 +786,11 @@ def admin_panel():
                                     st.session_state[f"del_trans_{tr_id}"] = True
                                     st.session_state.pop(f"edit_trans_{tr_id}", None)
 
-                            # ফাংশন ৫: ডিলিট কনফার্মেশন সহ
                             if st.session_state.get(f"del_trans_{tr_id}"):
                                 st.warning(f"⚠️ {fmt(amount)} {t('টাকার লেনদেন স্থায়ীভাবে মুছে যাবে। নিশ্চিত?', 'Taka transaction will be permanently deleted. Confirm?')}")
                                 cy, cn = st.columns(2)
                                 with cy:
                                     if st.button(f"✅ {t('হ্যাঁ, মুছুন', 'Yes, Delete')}", key=f"yd_{tr_id}"):
-                                        # ফাংশন ৬: অটো ব্যালেন্স আপডেট — বিয়োগ
                                         mem_df2 = load_df(MEMBERS_CSV, MEMBER_COLS)
                                         idx2 = mem_df2[mem_df2['id'] == str(member_id)].index
                                         if len(idx2) > 0:
@@ -822,10 +807,9 @@ def admin_panel():
                                         st.session_state.pop(f"del_trans_{tr_id}", None)
                                         st.rerun()
 
-                            # ফাংশন ৪: এডিট ফর্ম
                             if st.session_state.get(f"edit_trans_{tr_id}"):
                                 with st.form(f"ef_{tr_id}"):
-                                    st.markdown(f"**✏️ {t('লেনদেন সম্পাদনা করুন', 'Edit Transaction')}** — {tr.get('full_date','')} | {tr.get('month_name','')} {tr.get('year','')}")
+                                    st.markdown(f"**✏️ {t('লেনদেন সম্পাদনা করুন', 'Edit Transaction')}** — {tr.get('full_date', '')} | {tr.get('month_name', '')} {tr.get('year', '')}")
                                     new_amount = st.number_input(t("নতুন পরিমাণ (টাকা)", "New Amount (Taka)"), value=amount, min_value=0, step=50)
                                     new_late = st.number_input(t("লেট ফি (টাকা)", "Late Fee (Taka)"), value=late_val, min_value=0, step=10)
                                     col_s, col_c = st.columns(2)
@@ -835,7 +819,6 @@ def admin_panel():
                                         cancelled = st.form_submit_button(f"❌ {t('বাতিল', 'Cancel')}")
 
                                     if submitted:
-                                        # ফাংশন ৬: অটো ব্যালেন্স আপডেট — পার্থক্য যোগ/বিয়োগ
                                         diff = int(new_amount) - amount
                                         mem_df3 = load_df(MEMBERS_CSV, MEMBER_COLS)
                                         idx3 = mem_df3[mem_df3['id'] == str(member_id)].index
@@ -852,7 +835,6 @@ def admin_panel():
                                         st.session_state.pop(f"edit_trans_{tr_id}", None)
                                         st.rerun()
                     else:
-                        # ফাংশন ৭: লেনদেন না থাকলে মেসেজ
                         st.info(t("⚠️ এই সদস্যের কোনো লেনদেন নেই।", "⚠️ No transactions found for this member."))
 
     elif f"🔗 {t('সদস্য লিংক', 'Member Links')}" in menu:
@@ -879,7 +861,6 @@ def admin_panel():
         st.markdown(f"### 💸 {t('খরচ ব্যবস্থাপনা', 'Expense Management')}")
         tab1, tab2 = st.tabs([f"➕ {t('নতুন খরচ', 'New Expense')}", f"📋 {t('তালিকা ও মোট', 'List & Total')}"])
 
-        # ফাংশন ১: নতুন খরচ যোগ
         with tab1:
             with st.form("exp_form"):
                 desc = st.text_input(t("বিবরণ *", "Description *"))
@@ -898,20 +879,16 @@ def admin_panel():
                     else:
                         st.error(t("❌ বিবরণ ও পরিমাণ দেওয়া আবশ্যক।", "❌ Description and amount are required."))
 
-        # ফাংশন ২, ৩, ৪, ৫, ৬: তালিকা, মোট, ডিলিট, অটো রিফ্রেশ, খালি অবস্থা
         with tab2:
             expenses = get_all_expenses()
             if not expenses:
-                # ফাংশন ৬: খালি অবস্থায় মেসেজ
                 st.info(t("কোনো খরচ নেই। নতুন খরচ যোগ করুন।", "No expenses found. Add a new expense."))
             else:
-                # ফাংশন ৩: মোট খরচ সবার আগে দেখানো
                 total_exp = sum(int(float(e.get('amount', 0))) for e in expenses)
                 st.metric(f"📊 {t('মোট খরচ', 'Total Expenses')}", f"{fmt(total_exp)} {t('টাকা', 'Taka')}")
 
                 st.markdown("---")
 
-                # ফাংশন ২: খরচের তালিকা — expander এ লুকানো
                 with st.expander(f"📋 {t('সম্পূর্ণ খরচের তালিকা দেখুন', 'View Full Expense List')} ({len(expenses)} টি)", expanded=False):
                     table_data = []
                     for exp in expenses:
@@ -931,20 +908,16 @@ def admin_panel():
                     "⚠️ Deleting only removes the record. Cash balance will NOT increase."
                 ))
 
-                # ফাংশন ৪ ও ৫: ডিলিট বাটন — কনফার্মেশন ছাড়া, অটো রিফ্রেশ
                 for exp in expenses:
                     col1, col2 = st.columns([7, 1])
                     amt_v = int(float(exp['amount'])) if exp.get('amount') else 0
                     with col1:
                         st.write(f"📅 {exp.get('date','')} | 🏷️ {exp.get('category','')} | {str(exp.get('description',''))[:40]} | **{fmt(amt_v)} টাকা**")
                     with col2:
-                        # ফাংশন ৪: ডিলিট — কোনো কনফার্মেশন নেই, ব্যালেন্স অপরিবর্তিত
                         if st.button("🗑️", key=f"de_{exp['id']}", help=t("মুছুন (ব্যালেন্স পরিবর্তন হবে না)", "Delete (balance unchanged)")):
                             delete_expense(exp['id'])
-                            # ফাংশন ৫: অটো রিফ্রেশ
                             st.rerun()
 
-    # FIX #5: ফান্ড উত্তোলন — ব্যালেন্স ০ হলে হবে না
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
         st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
         cash = get_cash_balance()
