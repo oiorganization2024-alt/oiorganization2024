@@ -312,6 +312,7 @@ def add_expense(data):
     append_row(EXPENSES_CSV, data, EXPENSE_COLS)
 
 def delete_expense(exp_id):
+    """খরচ ডিলিট করলে শুধু রেকর্ড মুছে যাবে, ব্যালেন্সে কোনো প্রভাব পড়বে না"""
     df = load_df(EXPENSES_CSV, EXPENSE_COLS)
     df = df[df['id'] != int(exp_id)]
     save_df(df, EXPENSES_CSV)
@@ -722,7 +723,6 @@ def admin_panel():
             else:
                 st.success(f"🎉 {t('সবাই জমা দিয়েছেন', 'All paid')}!")
 
-    # লেনদেন ব্যবস্থাপনা — সম্পূর্ণ ৭টি ফাংশন সহ
     elif f"💰 {t('লেনদেন ব্যবস্থাপনা', 'Transactions')}" in menu:
         st.markdown(f"### 💰 {t('লেনদেন ব্যবস্থাপনা', 'Transaction Management')}")
         members = get_all_members()
@@ -775,7 +775,6 @@ def admin_panel():
 
                             col1, col2, col3 = st.columns([5, 1, 1])
                             with col1:
-                                # FIXED: সঠিক কোটেশন ব্যবহার করা হয়েছে
                                 st.write(f"📅 {tr.get('full_date', '')} — **{fmt(amount)}** {t('টাকা','Taka')} | {tr.get('month_name', '')} {tr.get('year', '')} | লেট ফি: {fmt(late_val)}")
                             with col2:
                                 if st.button("✏️", key=f"et_{tr_id}", help=t("এডিট করুন","Edit")):
@@ -856,7 +855,6 @@ def admin_panel():
                 st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{m["password"]}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("পাসওয়ার্ড কপি", "Copy Pass")}</button>', unsafe_allow_html=True)
             st.markdown("---")
 
-    # খরচ ব্যবস্থাপনা — ৬টি ফাংশন সহ
     elif f"💸 {t('খরচ ব্যবস্থাপনা', 'Expenses')}" in menu:
         st.markdown(f"### 💸 {t('খরচ ব্যবস্থাপনা', 'Expense Management')}")
         tab1, tab2 = st.tabs([f"➕ {t('নতুন খরচ', 'New Expense')}", f"📋 {t('তালিকা ও মোট', 'List & Total')}"])
@@ -904,18 +902,21 @@ def admin_panel():
 
                 st.markdown(f"#### 🗑️ {t('খরচ মুছুন', 'Delete Expenses')}")
                 st.caption(t(
-                    "⚠️ খরচ ডিলিট করলে শুধু রেকর্ড মুছবে। ক্যাশ ব্যালেন্স বাড়বে না।",
-                    "⚠️ Deleting only removes the record. Cash balance will NOT increase."
+                    "⚠️ খরচ ডিলিট করলে শুধু রেকর্ড মুছবে। ক্যাশ ব্যালেন্স অপরিবর্তিত থাকবে।",
+                    "⚠️ Deleting only removes the record. Cash balance will remain unchanged."
                 ))
 
+                # খরচ ডিলিট - কোনো কনফার্মেশন ছাড়া এবং ব্যালেন্স পরিবর্তন হবে না
                 for exp in expenses:
                     col1, col2 = st.columns([7, 1])
                     amt_v = int(float(exp['amount'])) if exp.get('amount') else 0
                     with col1:
                         st.write(f"📅 {exp.get('date','')} | 🏷️ {exp.get('category','')} | {str(exp.get('description',''))[:40]} | **{fmt(amt_v)} টাকা**")
                     with col2:
-                        if st.button("🗑️", key=f"de_{exp['id']}", help=t("মুছুন (ব্যালেন্স পরিবর্তন হবে না)", "Delete (balance unchanged)")):
+                        # ডিলিট বাটন - কোনো কনফার্মেশন নেই, শুধু ডিলিট করবে
+                        if st.button("🗑️", key=f"de_{exp['id']}", help=t("মুছুন (ব্যালেন্স অপরিবর্তিত)", "Delete (balance unchanged)")):
                             delete_expense(exp['id'])
+                            # পেজ রিফ্রেশ হবে এবং ব্যালেন্স একই থাকবে
                             st.rerun()
 
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
