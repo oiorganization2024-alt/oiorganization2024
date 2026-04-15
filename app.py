@@ -789,7 +789,7 @@ def admin_panel():
 
                             col1, col2, col3 = st.columns([5, 1, 1])
                             with col1:
-                                st.write(f"📅 {tr.get('full_date',''')} — **{fmt(amount)}** {t('টাকা','Taka')} | {tr.get('month_name','')} {tr.get('year','')} | লেট ফি: {fmt(late_val)}")
+                                st.write(f"📅 {tr.get('full_date', '')} — **{fmt(amount)}** {t('টাকা', 'Taka')} | {tr.get('month_name', '')} {tr.get('year', '')} | লেট ফি: {fmt(late_val)}")
                             with col2:
                                 if st.button("✏️", key=f"et_{tr_id}", help=t("এডিট করুন","Edit")):
                                     st.session_state[f"edit_trans_{tr_id}"] = True
