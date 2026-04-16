@@ -61,7 +61,6 @@ EXPENSES_CSV = f"{DATA_DIR}/expenses.csv"
 WITHDRAWALS_CSV = f"{DATA_DIR}/withdrawals.csv"
 FUND_CSV = f"{DATA_DIR}/fund_transactions.csv"
 SETTINGS_JSON = f"{DATA_DIR}/settings.json"
-DELETED_EXPENSES_CSV = f"{DATA_DIR}/deleted_expenses.csv"
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
@@ -72,36 +71,6 @@ TRANSACTION_COLS = ['id', 'member_id', 'amount', 'transaction_type', 'day', 'mon
 EXPENSE_COLS = ['id', 'description', 'amount', 'date', 'category']
 WITHDRAWAL_COLS = ['id', 'date', 'amount', 'description', 'withdrawn_by', 'previous_balance', 'current_balance', 'created_at']
 FUND_COLS = ['id', 'type', 'amount', 'description', 'date', 'previous_balance', 'current_balance', 'created_at']
-DELETED_EXPENSE_COLS = ['id', 'original_id', 'description', 'amount', 'date', 'category', 'deleted_at', 'deleted_by']
-
-# ==================== নোটিফিকেশন ফাংশন ====================
-def show_success_notification(message, duration=3):
-    """স্প্রিন নোটিফিকেশন দেখায়"""
-    notification_html = f"""
-    <div id="successToast" style="position: fixed; top: 20px; right: 20px; 
-         background: linear-gradient(135deg, #00b09b, #96c93d); 
-         color: white; padding: 16px 24px; border-radius: 12px; 
-         box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 9999;
-         font-weight: bold; animation: slideIn 0.3s ease-out;">
-        ✅ {message}
-    </div>
-    <style>
-        @keyframes slideIn {{
-            from {{ transform: translateX(100%); opacity: 0; }}
-            to {{ transform: translateX(0); opacity: 1; }}
-        }}
-    </style>
-    <script>
-        setTimeout(function() {{
-            var toast = document.getElementById('successToast');
-            if(toast) {{
-                toast.style.animation = 'slideIn 0.3s reverse';
-                setTimeout(function() {{ toast.remove(); }}, 300);
-            }}
-        }}, {duration}000);
-    </script>
-    """
-    st.markdown(notification_html, unsafe_allow_html=True)
 
 # ==================== CSV হেল্পার ====================
 def load_df(file_path, columns):
@@ -236,7 +205,8 @@ def get_fund_balance():
     return int(deposits - withdrawals)
 
 def get_cash_balance():
-    return int(get_total_savings() + get_fund_balance() - get_total_expenses() - get_total_withdrawals())
+    """মেইন ব্যালেন্স - খরচের কোনো প্রভাব নেই"""
+    return int(get_total_savings() + get_fund_balance() - get_total_withdrawals())
 
 def get_paid_members():
     current = datetime.now()
@@ -338,46 +308,21 @@ def get_all_expenses():
     return df.to_dict('records')
 
 def add_expense(data):
-    """নতুন খরচ যোগ করে এবং সাকসেস নোটিফিকেশন দেখায়"""
+    """নতুন খরচ যোগ করে এবং নোটিফিকেশন দেখায়"""
     data['id'] = get_next_id(EXPENSES_CSV, EXPENSE_COLS)
     data['amount'] = int(data['amount'])
     append_row(EXPENSES_CSV, data, EXPENSE_COLS)
     
-    # সাকসেস নোটিফিকেশন দেখান
-    show_success_notification(f"💸 {fmt(data['amount'])} টাকার খরচ যোগ হয়েছে!")
+    # নোটিফিকেশন দেখান
+    st.success(f"✅ {fmt(data['amount'])} টাকার খরচ সফলভাবে যোগ হয়েছে!")
     
     return data['id']
 
 def delete_expense(exp_id):
-    """খরচ ডিলিট - ব্যালেন্স অপরিবর্তিত রাখে (শুধু রেকর্ড আর্কাইভ করে)"""
-    
-    # 1. আসল খরচ বের করুন
+    """শুধু রেকর্ড মুছে ফেলে"""
     df = load_df(EXPENSES_CSV, EXPENSE_COLS)
-    expense_row = df[df['id'] == int(exp_id)]
-    
-    if len(expense_row) == 0:
-        return False
-    
-    # 2. ডিলিটেড ফাইলে সংরক্ষণ করুন
-    deleted_data = {
-        'id': get_next_id(DELETED_EXPENSES_CSV, DELETED_EXPENSE_COLS),
-        'original_id': int(exp_id),
-        'description': expense_row.iloc[0]['description'],
-        'amount': expense_row.iloc[0]['amount'],
-        'date': expense_row.iloc[0]['date'],
-        'category': expense_row.iloc[0]['category'],
-        'deleted_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'deleted_by': 'Admin'
-    }
-    append_row(DELETED_EXPENSES_CSV, deleted_data, DELETED_EXPENSE_COLS)
-    
-    # 3. আসল ফাইল থেকে ডিলিট করুন
     df = df[df['id'] != int(exp_id)]
     save_df(df, EXPENSES_CSV)
-    
-    # সাকসেস নোটিফিকেশন
-    show_success_notification(f"✅ {fmt(expense_row.iloc[0]['amount'])} টাকার খরচ ডিলিট হয়েছে (ব্যালেন্স অপরিবর্তিত)!")
-    
     return True
 
 def get_all_withdrawals():
@@ -963,7 +908,7 @@ def admin_panel():
 
     elif f"💸 {t('ব্যয় হিসাব', 'Expenses')}" in menu:
         st.markdown(f"### 💸 {t('ব্যয় হিসাব', 'Expense Management')}")
-        st.info(f"💰 {t('নতুন খরচ যোগ করলে মেইন ক্যাশ ব্যালেন্স থেকে টাকা কমে যাবে।', 'Adding a new expense will reduce the main cash balance.')}")
+        st.info(f"💰 {t('নতুন খরচ যোগ করলে শুধু তালিকায় যোগ হবে, মেইন ব্যালেন্স অপরিবর্তিত থাকবে।', 'Adding expense only adds to list, main balance unchanged.')}")
 
         with st.form("exp_form_new"):
             desc = st.text_input(t("বিবরণ *", "Description *"), placeholder=t("যেমন: চা-নাস্তা, স্টেশনারি কেনা...", "e.g. Tea, stationery..."))
@@ -985,7 +930,7 @@ def admin_panel():
                         'date': datetime.now().strftime("%Y-%m-%d"),
                         'category': cat
                     })
-                    time.sleep(0.5)
+                    time.sleep(1)
                     st.rerun()
                 else:
                     st.error(t("❌ বিবরণ ও পরিমাণ দেওয়া আবশ্যক।", "❌ Description and amount are required."))
@@ -993,8 +938,8 @@ def admin_panel():
     elif f"📒 {t('ব্যয় তালিকা', 'Expense List')}" in menu:
         st.markdown(f"### 📒 {t('ব্যয় তালিকা', 'Expense List')}")
         st.caption(t(
-            "⚠️ এই তালিকা থেকে খরচ ডিলিট করলে শুধু রেকর্ড আর্কাইভ হবে — মূল ব্যালেন্সে কোনো পরিবর্তন হবে না।",
-            "⚠️ Deleting from this list only archives the record — main balance will NOT change."
+            "ℹ️ এই তালিকা শুধু রেকর্ড রাখার জন্য। ব্যালেন্সের সাথে এর কোনো সম্পর্ক নেই।",
+            "ℹ️ This list is for record keeping only. No relation with main balance."
         ))
 
         expenses = get_all_expenses()
@@ -1027,26 +972,31 @@ def admin_panel():
 
             st.markdown(f"#### 🗑️ {t('খরচ ডিলিট করুন', 'Delete Expenses')}")
             st.caption(t(
-                "⚠️ ডিলিট করলেও ব্যালেন্স অপরিবর্তিত থাকবে। শুধু রেকর্ড আর্কাইভ হবে।",
-                "⚠️ Balance remains unchanged. Only record will be archived."
+                "⚠️ ডিলিট করলেও ব্যালেন্স অপরিবর্তিত থাকবে। শুধু রেকর্ড মুছে যাবে।",
+                "⚠️ Balance remains unchanged. Only record will be deleted."
             ))
 
             for exp in expenses:
-                col1, col2, col3 = st.columns([6, 1, 1])
+                col1, col2 = st.columns([8, 1])
                 amt_v = int(float(exp['amount'])) if exp.get('amount') else 0
                 with col1:
                     st.write(f"📅 {exp.get('date','')} | 🏷️ {exp.get('category','')} | {str(exp.get('description',''))[:40]} | **{fmt(amt_v)} টাকা**")
                 with col2:
-                    if st.button("🗑️ ডিলিট", key=f"del_{exp['id']}", help=t("মুছুন (ব্যালেন্স পরিবর্তন হবে না)", "Delete (balance unchanged)")):
+                    if st.button("🗑️ ডিলিট", key=f"del_{exp['id']}"):
                         st.session_state[f"confirm_del_{exp['id']}"] = True
-                with col3:
-                    if st.session_state.get(f"confirm_del_{exp['id']}"):
-                        if st.button("✅ নিশ্চিত", key=f"confirm_{exp['id']}"):
+                
+                if st.session_state.get(f"confirm_del_{exp['id']}"):
+                    st.warning(f"⚠️ {t('নিশ্চিত করুন:', 'Confirm:')} {fmt(amt_v)} {t('টাকার খরচ ডিলিট করুন?', 'Taka expense delete?')}")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"yes_{exp['id']}"):
                             delete_expense(exp['id'])
                             st.session_state.pop(f"confirm_del_{exp['id']}", None)
+                            st.success(f"✅ {fmt(amt_v)} {t('টাকার খরচ ডিলিট হয়েছে!', 'Taka expense deleted!')}")
                             time.sleep(0.5)
                             st.rerun()
-                        if st.button("❌ বাতিল", key=f"cancel_{exp['id']}"):
+                    with c2:
+                        if st.button(f"❌ {t('না', 'No')}", key=f"no_{exp['id']}"):
                             st.session_state.pop(f"confirm_del_{exp['id']}", None)
                             st.rerun()
 
@@ -1071,7 +1021,7 @@ def admin_panel():
                             'previous_balance': cur_bal, 'current_balance': int(cur_bal + amount),
                             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
-                        show_success_notification(f"✅ {fmt(amount)} টাকা ফান্ডে জমা হয়েছে!")
+                        st.success(f"✅ {fmt(amount)} {t('টাকা জমা হয়েছে!', 'Taka deposited!')}!")
                         time.sleep(1)
                         st.rerun()
                     else:
@@ -1109,7 +1059,7 @@ def admin_panel():
                                     'current_balance': int(current_fund_balance - amount),
                                     'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 })
-                                show_success_notification(f"✅ {fmt(amount)} টাকা উত্তোলন সম্পন্ন!")
+                                st.success(f"✅ {fmt(amount)} {t('টাকা উত্তোলন সম্পন্ন!', 'Taka withdrawn!')}!")
                                 st.rerun()
                             else:
                                 st.error(t("❌ উত্তোলন সম্ভব হয়নি!", "❌ Withdrawal failed!"))
@@ -1195,7 +1145,7 @@ def admin_panel():
         test_email = st.text_input(t("টেস্ট ইমেইল", "Test Email"), placeholder="example@gmail.com")
         if st.button("📨 টেস্ট পাঠান", type="primary"):
             if send_test_email(test_email):
-                show_success_notification("✅ ইমেইল পাঠানো হয়েছে!")
+                st.success("✅ ইমেইল পাঠানো হয়েছে!")
             else:
                 st.error("❌ পাঠানো ব্যর্থ হয়েছে")
 
@@ -1300,7 +1250,7 @@ def member_dashboard_view():
         if st.button("আপডেট করুন", type="primary"):
             if new_pass and new_pass == confirm:
                 update_member(member['id'], {'password': new_pass})
-                show_success_notification("✅ পাসওয়ার্ড পরিবর্তন হয়েছে!")
+                st.success("✅ পাসওয়ার্ড পরিবর্তন হয়েছে!")
             else:
                 st.error("❌ পাসওয়ার্ড মিলছে না")
 
