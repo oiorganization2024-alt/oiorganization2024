@@ -319,7 +319,7 @@ def delete_expense(exp_id):
     df = load_df(EXPENSES_CSV, EXPENSE_COLS)
     df = df[df['id'] != int(exp_id)]
     save_df(df, EXPENSES_CSV)
-    return True
+    return False
 
 def get_all_withdrawals():
     df = load_df(WITHDRAWALS_CSV, WITHDRAWAL_COLS)
