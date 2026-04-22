@@ -128,34 +128,73 @@ def check_and_archive_old_data():
         save_settings(settings)
 
 # ==================== ইমেইল ====================
-def send_test_email(to_email):
+def send_email(to_email, subject, html_body):
+    """যেকোনো ইমেইল পাঠানোর মূল ফাংশন"""
     if not to_email or '@' not in str(to_email):
-        return False
+        return False, "ইমেইল ঠিকানা সঠিক নয়"
     try:
         import smtplib
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
-        msg = MIMEMultipart()
-        msg['From'] = f"{SOMITI_NAME} <{SENDER_EMAIL}>"
-        msg['To'] = to_email
-        msg['Subject'] = f"🧪 ইমেইল টেস্ট - {SOMITI_NAME}"
-        html = f"""
-        <html><head><meta charset="UTF-8"></head>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2>🌾 {SOMITI_NAME}</h2>
-            <p>✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
-            <hr><p style="color: #666; font-size: 12px;">{SOMITI_NAME_EN}</p>
-        </body></html>
-        """
-        msg.attach(MIMEText(html, 'html', 'utf-8'))
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15)
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        return True
+        msg = MIMEMultipart('alternative')
+        msg['From']    = f"{SOMITI_NAME} <{SENDER_EMAIL}>"
+        msg['To']      = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=20) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        return True, "সফলভাবে পাঠানো হয়েছে"
+    except smtplib.SMTPAuthenticationError:
+        return False, "Gmail অথেনটিকেশন ব্যর্থ। App Password চেক করুন।"
+    except smtplib.SMTPException as e:
+        return False, f"SMTP Error: {str(e)}"
     except Exception as e:
-        print(f"Email Error: {e}")
-        return False
+        return False, f"Error: {str(e)}"
+
+def send_test_email(to_email):
+    subject = f"🧪 ইমেইল টেস্ট — {SOMITI_NAME}"
+    html = f"""
+    <html><head><meta charset="UTF-8"></head>
+    <body style="font-family:Arial,sans-serif;padding:30px;background:#f5f5f5;">
+      <div style="max-width:500px;margin:auto;background:white;border-radius:12px;padding:30px;border:1px solid #ddd;">
+        <h2 style="color:#1a5276;">🌾 {SOMITI_NAME}</h2>
+        <p style="font-size:16px;">✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
+        <p style="color:#555;">এই ইমেইলটি একটি টেস্ট মেসেজ।</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+        <p style="color:#999;font-size:12px;">{SOMITI_NAME_EN} | {datetime.now().strftime('%d-%m-%Y %H:%M')}</p>
+      </div>
+    </body></html>
+    """
+    ok, msg = send_email(to_email, subject, html)
+    return ok, msg
+
+def send_notification_email(to_emails, subject, message, sender_name="Admin"):
+    """নোটিফিকেশন ইমেইল — একাধিক প্রাপক"""
+    html = f"""
+    <html><head><meta charset="UTF-8"></head>
+    <body style="font-family:Arial,sans-serif;padding:30px;background:#f5f5f5;">
+      <div style="max-width:560px;margin:auto;background:white;border-radius:12px;
+                  padding:30px;border:1px solid #ddd;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <div style="background:linear-gradient(135deg,#1a5276,#2980b9);padding:20px;
+                    border-radius:8px;margin-bottom:24px;text-align:center;">
+          <h2 style="color:white;margin:0;">🌾 {SOMITI_NAME}</h2>
+          <p style="color:#cce;margin:6px 0 0 0;font-size:14px;">নোটিফিকেশন</p>
+        </div>
+        <p style="font-size:15px;line-height:1.7;color:#333;white-space:pre-wrap;">{message}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+        <p style="color:#aaa;font-size:12px;text-align:center;">
+          পাঠিয়েছেন: {sender_name} &nbsp;|&nbsp; {datetime.now().strftime('%d %B %Y, %H:%M')}
+          <br>{SOMITI_NAME_EN}
+        </p>
+      </div>
+    </body></html>
+    """
+    results = []
+    for email in to_emails:
+        ok, msg = send_email(email.strip(), subject, html)
+        results.append({'email': email.strip(), 'ok': ok, 'msg': msg})
+    return results
 
 # ==================== ইউটিলিটি ====================
 def generate_member_id():
@@ -169,7 +208,7 @@ def generate_password():
     return ''.join(random.choices(string.digits, k=6))
 
 def fmt(val):
-    """সব পরিমাণ পূর্ণ সংখ্যায় দেখাবে, দশমিক নয়"""
+    """FIX #6: সব পরিমাণ পূর্ণ সংখ্যায় দেখাবে, দশমিক নয়"""
     try:
         return f"{int(float(val)):,}"
     except:
@@ -205,8 +244,7 @@ def get_fund_balance():
     return int(deposits - withdrawals)
 
 def get_cash_balance():
-    """মেইন ব্যালেন্স - খরচের কোনো প্রভাব নেই"""
-    return int(get_total_savings() + get_fund_balance() - get_total_withdrawals())
+    return int(get_total_savings() + get_fund_balance() - get_total_expenses() - get_total_withdrawals())
 
 def get_paid_members():
     current = datetime.now()
@@ -267,13 +305,16 @@ def update_member(member_id, updates):
         return True
     return False
 
+# FIX #1: সদস্য ডিলিট - সঠিকভাবে str তুলনা করে ফিল্টার করবে
 def delete_member(member_id):
     member_id_str = str(member_id)
+    # ট্রানজেকশন ডিলিট
     trans_df = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS)
     if len(trans_df) > 0:
         trans_df['member_id'] = trans_df['member_id'].astype(str)
         trans_df = trans_df[trans_df['member_id'] != member_id_str]
         save_df(trans_df, TRANSACTIONS_CSV)
+    # মেম্বার ডিলিট
     mem_df = load_df(MEMBERS_CSV, MEMBER_COLS)
     if len(mem_df) > 0:
         mem_df['id'] = mem_df['id'].astype(str)
@@ -308,18 +349,12 @@ def get_all_expenses():
     return df.to_dict('records')
 
 def add_expense(data):
-    """নতুন খরচ যোগ করে এবং নোটিফিকেশন দেখায়"""
     data['id'] = get_next_id(EXPENSES_CSV, EXPENSE_COLS)
     data['amount'] = int(data['amount'])
     append_row(EXPENSES_CSV, data, EXPENSE_COLS)
-    
-    # নোটিফিকেশন দেখান
-    st.success(f"✅ {fmt(data['amount'])} টাকার খরচ সফলভাবে যোগ হয়েছে!")
-    
-    return data['id']
 
+# FIX #4: খরচ ডিলিট - শুধু রেকর্ড মুছবে, ব্যালেন্সে কিছু যোগ হবে না
 def delete_expense(exp_id):
-    """শুধু রেকর্ড মুছে ফেলে"""
     df = load_df(EXPENSES_CSV, EXPENSE_COLS)
     df = df[df['id'] != int(exp_id)]
     save_df(df, EXPENSES_CSV)
@@ -341,6 +376,7 @@ def get_fund_transactions():
     df = df.sort_values('id', ascending=False)
     return df.to_dict('records')
 
+# FIX #5: ফান্ড উত্তোলন - ব্যালেন্স ০ বা কম হলে হবে না
 def add_fund_transaction(data):
     current_balance = get_fund_balance()
     if data['type'] == 'withdrawal':
@@ -528,8 +564,6 @@ def admin_panel():
                 f"💵 {t('টাকা জমা', 'Deposit')}",
                 f"🔄 {t('লেনদেন পরিবর্তন', 'Transactions')}",
                 f"💸 {t('ব্যয় হিসাব', 'Expenses')}",
-                f"📒 {t('ব্যয় তালিকা', 'Expense List')}",
-                f"🔗 {t('সদস্য লিংক', 'Member Links')}",
                 f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}",
                 f"📊 {t('রিপোর্ট', 'Reports')}",
                 f"📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}",
@@ -581,6 +615,7 @@ def admin_panel():
             else:
                 st.error(t("❌ নাম ও মোবাইল আবশ্যক", "❌ Name and mobile required"))
 
+    # FIX #1: সদস্য ডিলিট সমস্যা ঠিক করা হয়েছে
     elif f"✏️ {t('সদস্য ব্যবস্থাপনা', 'Manage Members')}" in menu:
         st.markdown(f"### ✏️ {t('সদস্য ব্যবস্থাপনা', 'Member Management')}")
         members = get_all_members()
@@ -614,6 +649,7 @@ def admin_panel():
                         if st.button(f"🗑️ {t('ডিলিট', 'Delete')}", key=f"del_{member_id}"):
                             st.session_state[f"delete_confirm_{member_id}"] = True
 
+                    # FIX #1: কনফার্মেশন key আলাদা রাখা হয়েছে যাতে clash না হয়
                     if st.session_state.get(f"delete_confirm_{member_id}"):
                         st.warning(f"⚠️ {t('আপনি কি নিশ্চিত? এই সদস্যের সকল ডাটা মুছে যাবে!', 'Are you sure? All data will be deleted!')}")
                         c1, c2 = st.columns(2)
@@ -655,6 +691,7 @@ def admin_panel():
         else:
             st.info(t("কোনো সদস্য নেই", "No members"))
 
+    # FIX #2: জমা দেওয়া সদস্য তালিকা - লুকানো অবস্থায় থাকবে
     elif f"💵 {t('টাকা জমা', 'Deposit')}" in menu:
         st.markdown(f"### 💵 {t('সদস্যের টাকা জমা', 'Member Deposit')}")
         tab1, tab2 = st.tabs([f"✅ {t('জমা দিয়েছে', 'Paid')}", f"❌ {t('জমা দেয়নি', 'Unpaid')}"])
@@ -662,6 +699,7 @@ def admin_panel():
         with tab1:
             paid = get_paid_members()
             if paid:
+                # FIX #2: expanded=False দিয়ে ডিফল্ট লুকানো
                 with st.expander(f"📋 {t('জমা দেওয়া সদস্য তালিকা দেখুন', 'View Paid Members List')} ({len(paid)} জন)", expanded=False):
                     table_data = []
                     for pm in paid:
@@ -731,185 +769,212 @@ def admin_panel():
             else:
                 st.success(f"🎉 {t('সবাই জমা দিয়েছেন', 'All paid')}!")
 
+    # ==================== লেনদেন পরিবর্তন ====================
     elif f"🔄 {t('লেনদেন পরিবর্তন', 'Transactions')}" in menu:
         st.markdown(f"### 🔄 {t('লেনদেন পরিবর্তন', 'Transaction Management')}")
 
-        members = get_all_members()
-        active_members = [m for m in members if m.get('status') == 'active']
+        # session_state initialize
+        if 'tx_sel_member' not in st.session_state:
+            st.session_state['tx_sel_member'] = None
+        if 'tx_sel_tr_id' not in st.session_state:
+            st.session_state['tx_sel_tr_id'] = None
+        if 'tx_mode' not in st.session_state:
+            st.session_state['tx_mode'] = None
+
+        # ── STEP 1: সদস্য নির্বাচন ──────────────────────────
+        all_members = get_all_members()
+        active_members = [m for m in all_members if str(m.get('status','')) == 'active']
 
         if not active_members:
             st.info(t("⚠️ কোনো সক্রিয় সদস্য নেই।", "⚠️ No active members found."))
         else:
-            member_options = ["— " + t("সদস্য নির্বাচন করুন", "Select a member") + " —"] + \
-                             [f"{m['name']}  ({m['id']})" for m in active_members]
+            member_labels = [f"{m['name']}  ({m['id']})" for m in active_members]
+            member_ids    = [str(m['id']) for m in active_members]
 
-            chosen = st.selectbox(
+            # বর্তমান নির্বাচিত index বের করো
+            cur_mid = st.session_state['tx_sel_member']
+            cur_idx = member_ids.index(cur_mid) if cur_mid in member_ids else 0
+
+            chosen_idx = st.selectbox(
                 t("👤 সদস্য নির্বাচন করুন", "Select Member"),
-                member_options,
-                key="tx_member_select"
+                range(len(member_labels)),
+                format_func=lambda i: member_labels[i],
+                index=cur_idx,
+                key="tx_member_sb"
             )
 
-            if chosen.startswith("—"):
-                st.info(t("উপরে তালিকা থেকে একজন সদস্য নির্বাচন করুন।", "Please select a member from the list above."))
+            # সদস্য পরিবর্তন হলে লেনদেন selection রিসেট করো
+            new_mid = member_ids[chosen_idx]
+            if new_mid != st.session_state['tx_sel_member']:
+                st.session_state['tx_sel_member'] = new_mid
+                st.session_state['tx_sel_tr_id']  = None
+                st.session_state['tx_mode']        = None
+
+            sel_id     = st.session_state['tx_sel_member']
+            sel_member = get_member_by_id(sel_id)
+
+            if not sel_member:
+                st.error(t("সদস্য পাওয়া যায়নি।", "Member not found."))
             else:
-                sel_id = chosen.split("(")[-1].rstrip(")")
-                sel_member = get_member_by_id(sel_id)
+                savings_val = int(float(sel_member.get('total_savings', 0) or 0))
+                monthly_val = int(float(sel_member.get('monthly_savings', 500) or 500))
 
-                if not sel_member:
-                    st.error(t("সদস্য পাওয়া যায়নি।", "Member not found."))
+                # ── সদস্য তথ্য কার্ড ────────────────────────────
+                st.markdown(f"""
+                <div style="background:#21262d;padding:12px 16px;border-radius:10px;
+                            border:1px solid #30363d;margin-bottom:16px;">
+                    <b>👤 {sel_member['name']}</b> &nbsp;|&nbsp;
+                    🆔 {sel_member['id']} &nbsp;|&nbsp;
+                    📱 {sel_member['phone']} &nbsp;|&nbsp;
+                    💰 <b style="color:#58a6ff;">{fmt(savings_val)} টাকা মোট জমা</b> &nbsp;|&nbsp;
+                    📅 মাসিক কিস্তি: <b>{fmt(monthly_val)} টাকা</b>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ── STEP 2: লেনদেন লোড ──────────────────────────
+                trans = get_member_transactions(sel_id)
+
+                if not trans:
+                    st.info(t("⚠️ এই সদস্যের কোনো লেনদেন নেই।", "⚠️ No transactions for this member."))
                 else:
-                    savings_val = int(float(sel_member.get('total_savings', 0))) if sel_member.get('total_savings') else 0
-                    monthly_val = int(float(sel_member.get('monthly_savings', 500))) if sel_member.get('monthly_savings') else 500
+                    # ── লেনদেন তালিকা টেবিল ────────────────────
+                    st.markdown(f"#### 📋 {t('লেনদেন তালিকা', 'Transaction List')} ({len(trans)} টি)")
+                    tbl = []
+                    for tr in trans:
+                        a  = int(float(tr['amount']))    if tr.get('amount')   else 0
+                        lf = int(float(tr['late_fee']))  if tr.get('late_fee') else 0
+                        tbl.append({
+                            "ID": str(tr['id']),
+                            t('তারিখ','Date'):   tr.get('full_date',''),
+                            t('মাস','Month'):    f"{tr.get('month_name','')} {tr.get('year','')}",
+                            t('পরিমাণ','Amount'): fmt(a),
+                            t('লেট ফি','Late Fee'): fmt(lf),
+                        })
+                    st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True, height=240)
 
+                    st.markdown("---")
+
+                    # ── STEP 3: লেনদেন নির্বাচন (selectbox) ────
+                    tr_labels = [
+                        f"#{tr['id']}  |  {tr.get('full_date','')}  |  "
+                        f"{fmt(int(float(tr['amount'])) if tr.get('amount') else 0)} টাকা  |  "
+                        f"{tr.get('month_name','')} {tr.get('year','')}"
+                        for tr in trans
+                    ]
+                    tr_ids = [str(tr['id']) for tr in trans]
+
+                    cur_trid = st.session_state['tx_sel_tr_id']
+                    tr_cur_idx = tr_ids.index(cur_trid) if cur_trid in tr_ids else 0
+
+                    chosen_tr_idx = st.selectbox(
+                        t("✏️ পরিবর্তন করতে লেনদেন নির্বাচন করুন", "Select transaction to edit/delete"),
+                        range(len(tr_labels)),
+                        format_func=lambda i: tr_labels[i],
+                        index=tr_cur_idx,
+                        key="tx_trans_sb"
+                    )
+
+                    new_trid = tr_ids[chosen_tr_idx]
+                    if new_trid != st.session_state['tx_sel_tr_id']:
+                        st.session_state['tx_sel_tr_id'] = new_trid
+                        st.session_state['tx_mode']      = None
+
+                    sel_tr     = trans[chosen_tr_idx]
+                    sel_tr_id  = sel_tr['id']
+                    sel_amount = int(float(sel_tr['amount']))    if sel_tr.get('amount')   else 0
+                    sel_late   = int(float(sel_tr['late_fee']))  if sel_tr.get('late_fee') else 0
+
+                    # নির্বাচিত লেনদেন হাইলাইট
                     st.markdown(f"""
-                    <div style="background:#21262d;padding:12px 16px;border-radius:10px;
-                                border:1px solid #30363d;margin-bottom:16px;">
-                        <b>👤 {sel_member['name']}</b> &nbsp;|&nbsp;
-                        🆔 {sel_member['id']} &nbsp;|&nbsp;
-                        📱 {sel_member['phone']} &nbsp;|&nbsp;
-                        💰 <b style="color:#58a6ff;">{fmt(savings_val)} টাকা</b> &nbsp;|&nbsp;
-                        📅 মাসিক: <b>{fmt(monthly_val)} টাকা</b>
+                    <div style="background:#1c2d1c;padding:10px 16px;border-radius:8px;
+                                border:1px solid #2ea043;margin:8px 0 14px 0;">
+                        ✅ <b>নির্বাচিত লেনদেন:</b> &nbsp;
+                        ID #{sel_tr_id} &nbsp;|&nbsp;
+                        📅 {sel_tr.get('full_date','')} &nbsp;|&nbsp;
+                        💰 <b style="color:#58a6ff;">{fmt(sel_amount)} টাকা</b> &nbsp;|&nbsp;
+                        🗓️ {sel_tr.get('month_name','')} {sel_tr.get('year','')} &nbsp;|&nbsp;
+                        লেট ফি: {fmt(sel_late)} টাকা
                     </div>
                     """, unsafe_allow_html=True)
 
-                    trans = get_member_transactions(sel_id)
+                    # ── STEP 4: এডিট / ডিলিট বাটন ──────────────
+                    bc1, bc2 = st.columns(2)
+                    with bc1:
+                        if st.button(f"✏️ {t('এডিট করুন', 'Edit')}", key="btn_tx_edit", use_container_width=True, type="primary"):
+                            st.session_state['tx_mode'] = 'edit'
+                    with bc2:
+                        if st.button(f"🗑️ {t('ডিলিট করুন', 'Delete')}", key="btn_tx_del", use_container_width=True):
+                            st.session_state['tx_mode'] = 'delete'
 
-                    if not trans:
-                        st.info(t("⚠️ এই সদস্যের কোনো লেনদেন নেই।", "⚠️ No transactions for this member."))
-                    else:
-                        st.markdown(f"#### 📋 {t('লেনদেন তালিকা', 'Transaction List')} — {len(trans)} টি")
-                        table_rows = []
-                        for tr in trans:
-                            a = int(float(tr['amount'])) if tr.get('amount') else 0
-                            lf = int(float(tr.get('late_fee', 0))) if tr.get('late_fee') else 0
-                            table_rows.append({
-                                "#": tr['id'],
-                                t('তারিখ', 'Date'): tr.get('full_date', ''),
-                                t('মাস', 'Month'): f"{tr.get('month_name', '')} {tr.get('year', '')}",
-                                t('পরিমাণ', 'Amount'): fmt(a),
-                                t('লেট ফি', 'Late Fee'): fmt(lf),
-                            })
-                        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True, height=260)
+                    tx_mode = st.session_state.get('tx_mode')
 
-                        st.markdown("---")
+                    # ── এডিট প্যানেল ────────────────────────────
+                    if tx_mode == 'edit':
+                        st.markdown(f"#### ✏️ {t('লেনদেন এডিট', 'Edit Transaction')}")
+                        with st.form("form_tx_edit", clear_on_submit=False):
+                            st.caption(f"ID #{sel_tr_id} | {sel_tr.get('full_date','')} | {sel_tr.get('month_name','')} {sel_tr.get('year','')}")
+                            new_amt  = st.number_input(t("নতুন পরিমাণ (টাকা)", "New Amount"), value=sel_amount, min_value=0, step=50)
+                            new_lf   = st.number_input(t("লেট ফি (টাকা)", "Late Fee"),        value=sel_late,   min_value=0, step=10)
+                            fc1, fc2 = st.columns(2)
+                            with fc1:
+                                save_btn   = st.form_submit_button(f"💾 {t('সংরক্ষণ', 'Save')}", use_container_width=True)
+                            with fc2:
+                                cancel_btn = st.form_submit_button(f"❌ {t('বাতিল', 'Cancel')}", use_container_width=True)
 
-                        trans_options = [
-                            f"#{tr['id']}  |  {tr.get('full_date','')}  |  {fmt(int(float(tr['amount'])) if tr.get('amount') else 0)} টাকা  |  {tr.get('month_name','')} {tr.get('year','')}"
-                            for tr in trans
-                        ]
-                        sel_trans_label = st.selectbox(
-                            t("✏️ কোন লেনদেন পরিবর্তন করবেন?", "Which transaction to edit/delete?"),
-                            trans_options,
-                            key="tx_trans_select"
+                        if save_btn:
+                            diff = int(new_amt) - sel_amount
+                            mdf  = load_df(MEMBERS_CSV, MEMBER_COLS)
+                            ix   = mdf[mdf['id'] == str(sel_id)].index
+                            if len(ix) > 0:
+                                old_bal = int(float(mdf.loc[ix[0], 'total_savings'] or 0))
+                                mdf.loc[ix[0], 'total_savings'] = max(0, old_bal + diff)
+                                save_df(mdf, MEMBERS_CSV)
+                            update_transaction(sel_tr_id, {'amount': int(new_amt), 'late_fee': int(new_lf)})
+                            st.session_state['tx_mode'] = None
+                            st.success(t(
+                                f"✅ লেনদেন আপডেট হয়েছে! পরিমাণ {fmt(sel_amount)} → {fmt(int(new_amt))} টাকা। ব্যালেন্স স্বয়ংক্রিয়ভাবে আপডেট হয়েছে।",
+                                f"✅ Updated! Amount {fmt(sel_amount)} → {fmt(int(new_amt))} Taka. Balance auto-adjusted."
+                            ))
+                            time.sleep(0.5)
+                            st.rerun()
+                        if cancel_btn:
+                            st.session_state['tx_mode'] = None
+                            st.rerun()
+
+                    # ── ডিলিট কনফার্মেশন ────────────────────────
+                    elif tx_mode == 'delete':
+                        st.warning(
+                            f"⚠️ **{t('সতর্কতা:', 'Warning:')}** "
+                            f"ID #{sel_tr_id} — **{fmt(sel_amount)} টাকা**র লেনদেন "
+                            f"স্থায়ীভাবে মুছে যাবে এবং সদস্যের ব্যালেন্স {fmt(sel_amount)} টাকা কমবে।"
                         )
-
-                        sel_tr_idx = trans_options.index(sel_trans_label)
-                        sel_tr = trans[sel_tr_idx]
-                        sel_tr_id = sel_tr['id']
-                        sel_amount = int(float(sel_tr['amount'])) if sel_tr.get('amount') else 0
-                        sel_late = int(float(sel_tr.get('late_fee', 0))) if sel_tr.get('late_fee') else 0
-
-                        st.markdown(f"""
-                        <div style="background:#1c2d1c;padding:10px 16px;border-radius:8px;
-                                    border:1px solid #2ea043;margin:10px 0 16px 0;">
-                            ✅ <b>নির্বাচিত:</b> #{sel_tr_id} &nbsp;|&nbsp;
-                            📅 {sel_tr.get('full_date','')} &nbsp;|&nbsp;
-                            💰 <b style="color:#58a6ff;">{fmt(sel_amount)} টাকা</b> &nbsp;|&nbsp;
-                            🗓️ {sel_tr.get('month_name','')} {sel_tr.get('year','')} &nbsp;|&nbsp;
-                            লেট ফি: {fmt(sel_late)} টাকা
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        btn_col1, btn_col2 = st.columns(2)
-                        with btn_col1:
-                            if st.button(f"✏️ {t('এডিট করুন', 'Edit Transaction')}", key="btn_edit_tx", use_container_width=True):
-                                st.session_state['tx_mode'] = 'edit'
-                        with btn_col2:
-                            if st.button(f"🗑️ {t('ডিলিট করুন', 'Delete Transaction')}", key="btn_del_tx", use_container_width=True):
-                                st.session_state['tx_mode'] = 'delete'
-
-                        tx_mode = st.session_state.get('tx_mode', None)
-
-                        if tx_mode == 'edit':
-                            st.markdown(f"#### ✏️ {t('লেনদেন এডিট করুন', 'Edit Transaction')}")
-                            with st.form("form_edit_transaction"):
-                                new_amount = st.number_input(
-                                    t("নতুন পরিমাণ (টাকা)", "New Amount (Taka)"),
-                                    value=sel_amount, min_value=0, step=50
-                                )
-                                new_late = st.number_input(
-                                    t("লেট ফি (টাকা)", "Late Fee (Taka)"),
-                                    value=sel_late, min_value=0, step=10
-                                )
-                                c1, c2 = st.columns(2)
-                                with c1:
-                                    do_save = st.form_submit_button(f"💾 {t('সংরক্ষণ করুন', 'Save')}", use_container_width=True)
-                                with c2:
-                                    do_cancel = st.form_submit_button(f"❌ {t('বাতিল', 'Cancel')}", use_container_width=True)
-
-                            if do_save:
-                                diff = int(new_amount) - sel_amount
-                                mdf = load_df(MEMBERS_CSV, MEMBER_COLS)
-                                ix = mdf[mdf['id'] == str(sel_id)].index
-                                if len(ix) > 0:
-                                    cur = int(float(mdf.loc[ix[0], 'total_savings'])) if pd.notna(mdf.loc[ix[0], 'total_savings']) else 0
-                                    mdf.loc[ix[0], 'total_savings'] = max(0, cur + diff)
-                                    save_df(mdf, MEMBERS_CSV)
-                                update_transaction(sel_tr_id, {'amount': int(new_amount), 'late_fee': int(new_late)})
-                                st.session_state.pop('tx_mode', None)
-                                st.success(t("✅ লেনদেন আপডেট হয়েছে এবং ব্যালেন্স স্বয়ংক্রিয়ভাবে পরিবর্তন হয়েছে।",
-                                             "✅ Transaction updated and balance auto-adjusted."))
-                                time.sleep(0.3)
+                        dd1, dd2 = st.columns(2)
+                        with dd1:
+                            if st.button(f"✅ {t('হ্যাঁ, ডিলিট করুন', 'Yes, Delete')}", key="btn_tx_del_yes", use_container_width=True):
+                                mdf2 = load_df(MEMBERS_CSV, MEMBER_COLS)
+                                ix2  = mdf2[mdf2['id'] == str(sel_id)].index
+                                if len(ix2) > 0:
+                                    old_b2 = int(float(mdf2.loc[ix2[0], 'total_savings'] or 0))
+                                    mdf2.loc[ix2[0], 'total_savings'] = max(0, old_b2 - sel_amount)
+                                    save_df(mdf2, MEMBERS_CSV)
+                                delete_transaction(sel_tr_id)
+                                st.session_state['tx_mode']     = None
+                                st.session_state['tx_sel_tr_id'] = None
+                                st.success(t("✅ লেনদেন মুছে গেছে এবং ব্যালেন্স আপডেট হয়েছে।",
+                                             "✅ Deleted and balance updated."))
+                                time.sleep(0.5)
                                 st.rerun()
-                            if do_cancel:
-                                st.session_state.pop('tx_mode', None)
+                        with dd2:
+                            if st.button(f"❌ {t('না, বাতিল', 'No, Cancel')}", key="btn_tx_del_no", use_container_width=True):
+                                st.session_state['tx_mode'] = None
                                 st.rerun()
 
-                        elif tx_mode == 'delete':
-                            st.warning(f"⚠️ **{t('নিশ্চিত করুন:', 'Confirm:')}** #{sel_tr_id} — {fmt(sel_amount)} {t('টাকার লেনদেন স্থায়ীভাবে মুছে যাবে এবং ব্যালেন্স কমবে।', 'Taka transaction will be permanently deleted and balance will decrease.')}")
-                            dc1, dc2 = st.columns(2)
-                            with dc1:
-                                if st.button(f"✅ {t('হ্যাঁ, মুছুন', 'Yes, Delete')}", key="btn_confirm_del", use_container_width=True):
-                                    mdf2 = load_df(MEMBERS_CSV, MEMBER_COLS)
-                                    ix2 = mdf2[mdf2['id'] == str(sel_id)].index
-                                    if len(ix2) > 0:
-                                        cur2 = int(float(mdf2.loc[ix2[0], 'total_savings'])) if pd.notna(mdf2.loc[ix2[0], 'total_savings']) else 0
-                                        mdf2.loc[ix2[0], 'total_savings'] = max(0, cur2 - sel_amount)
-                                        save_df(mdf2, MEMBERS_CSV)
-                                    delete_transaction(sel_tr_id)
-                                    st.session_state.pop('tx_mode', None)
-                                    st.success(t("✅ লেনদেন মুছে গেছে এবং ব্যালেন্স আপডেট হয়েছে।",
-                                                 "✅ Transaction deleted and balance updated."))
-                                    time.sleep(0.3)
-                                    st.rerun()
-                            with dc2:
-                                if st.button(f"❌ {t('না, বাতিল', 'No, Cancel')}", key="btn_cancel_del", use_container_width=True):
-                                    st.session_state.pop('tx_mode', None)
-                                    st.rerun()
-
-    elif f"🔗 {t('সদস্য লিংক', 'Member Links')}" in menu:
-        st.markdown(f"### 🔗 {t('সদস্য লিংক', 'Member Links')}")
-        members = get_all_members()
-        app_url = get_app_url()
-        for m in members:
-            link = f"{app_url}/?member={m['id']}"
-            st.markdown(f"""
-            <div class="member-card">
-                <h4>👤 {m['name']} ({m['id']})</h4>
-                <p>📱 {m['phone']} | 🔑 {m['password']}</p>
-                <p>🔗 <code>{link}</code></p>
-            </div>""", unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{link}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("লিংক কপি", "Copy Link")}</button>', unsafe_allow_html=True)
-            with c2:
-                st.markdown(f'<button onclick="navigator.clipboard.writeText(\'{m["password"]}\')" style="background:#238636; color:white; border:none; padding:8px; border-radius:5px; width:100%;">📋 {t("পাসওয়ার্ড কপি", "Copy Pass")}</button>', unsafe_allow_html=True)
-            st.markdown("---")
-
+    # ==================== ব্যয় হিসাব (নতুন খরচ যোগ) ====================
     elif f"💸 {t('ব্যয় হিসাব', 'Expenses')}" in menu:
         st.markdown(f"### 💸 {t('ব্যয় হিসাব', 'Expense Management')}")
-        st.info(f"💰 {t('নতুন খরচ যোগ করলে শুধু তালিকায় যোগ হবে, মেইন ব্যালেন্স অপরিবর্তিত থাকবে।', 'Adding expense only adds to list, main balance unchanged.')}")
+        st.info(f"💰 {t('নতুন খরচ যোগ করলে মেইন ক্যাশ ব্যালেন্স থেকে টাকা কমে যাবে।', 'Adding a new expense will reduce the main cash balance.')}")
 
+        # ফাংশন ১: নতুন খরচ যোগ (বিবরণ, টাকা, ক্যাটাগরি)
         with st.form("exp_form_new"):
             desc = st.text_input(t("বিবরণ *", "Description *"), placeholder=t("যেমন: চা-নাস্তা, স্টেশনারি কেনা...", "e.g. Tea, stationery..."))
             amt = st.number_input(t("পরিমাণ (টাকা) *", "Amount (Taka) *"), min_value=0, step=10)
@@ -921,7 +986,6 @@ def admin_panel():
                 t("অন্যান্য", "Others")
             ])
             submitted = st.form_submit_button(f"💾 {t('খরচ যোগ করুন', 'Add Expense')}", type="primary", use_container_width=True)
-            
             if submitted:
                 if desc and amt > 0:
                     add_expense({
@@ -930,76 +994,12 @@ def admin_panel():
                         'date': datetime.now().strftime("%Y-%m-%d"),
                         'category': cat
                     })
-                    time.sleep(1)
+                    st.success(f"✅ {fmt(amt)} {t('টাকার খরচ যোগ হয়েছে। ক্যাশ ব্যালেন্স কমেছে।', 'Taka expense added. Cash balance reduced.')}")
                     st.rerun()
                 else:
                     st.error(t("❌ বিবরণ ও পরিমাণ দেওয়া আবশ্যক।", "❌ Description and amount are required."))
 
-    elif f"📒 {t('ব্যয় তালিকা', 'Expense List')}" in menu:
-        st.markdown(f"### 📒 {t('ব্যয় তালিকা', 'Expense List')}")
-        st.caption(t(
-            "ℹ️ এই তালিকা শুধু রেকর্ড রাখার জন্য। ব্যালেন্সের সাথে এর কোনো সম্পর্ক নেই।",
-            "ℹ️ This list is for record keeping only. No relation with main balance."
-        ))
-
-        expenses = get_all_expenses()
-
-        if not expenses:
-            st.info(t("📭 কোনো খরচ নেই। 'ব্যয় হিসাব' থেকে নতুন খরচ যোগ করুন।",
-                      "📭 No expenses found. Add from 'Expenses' menu."))
-        else:
-            total_exp = sum(int(float(e.get('amount', 0))) for e in expenses)
-            col_m1, col_m2 = st.columns(2)
-            with col_m1:
-                st.metric(f"📊 {t('মোট খরচ', 'Total Expenses')}", f"{fmt(total_exp)} {t('টাকা', 'Taka')}")
-            with col_m2:
-                st.metric(f"📋 {t('মোট রেকর্ড', 'Total Records')}", f"{len(expenses)} {t('টি', 'items')}")
-
-            st.markdown("---")
-
-            with st.expander(f"📋 {t('সম্পূর্ণ খরচের তালিকা দেখুন', 'View Full Expense List')} ({len(expenses)} টি)", expanded=True):
-                table_data = []
-                for exp in expenses:
-                    amt_v = int(float(exp['amount'])) if exp.get('amount') else 0
-                    table_data.append({
-                        t('তারিখ', 'Date'): exp.get('date', ''),
-                        t('ক্যাটাগরি', 'Category'): exp.get('category', ''),
-                        t('বিবরণ', 'Description'): str(exp.get('description', ''))[:45],
-                        t('পরিমাণ (টাকা)', 'Amount'): fmt(amt_v)
-                    })
-                df_exp = pd.DataFrame(table_data)
-                st.dataframe(df_exp, use_container_width=True, hide_index=True, height=300)
-
-            st.markdown(f"#### 🗑️ {t('খরচ ডিলিট করুন', 'Delete Expenses')}")
-            st.caption(t(
-                "⚠️ ডিলিট করলেও ব্যালেন্স অপরিবর্তিত থাকবে। শুধু রেকর্ড মুছে যাবে।",
-                "⚠️ Balance remains unchanged. Only record will be deleted."
-            ))
-
-            for exp in expenses:
-                col1, col2 = st.columns([8, 1])
-                amt_v = int(float(exp['amount'])) if exp.get('amount') else 0
-                with col1:
-                    st.write(f"📅 {exp.get('date','')} | 🏷️ {exp.get('category','')} | {str(exp.get('description',''))[:40]} | **{fmt(amt_v)} টাকা**")
-                with col2:
-                    if st.button("🗑️ ডিলিট", key=f"del_{exp['id']}"):
-                        st.session_state[f"confirm_del_{exp['id']}"] = True
-                
-                if st.session_state.get(f"confirm_del_{exp['id']}"):
-                    st.warning(f"⚠️ {t('নিশ্চিত করুন:', 'Confirm:')} {fmt(amt_v)} {t('টাকার খরচ ডিলিট করুন?', 'Taka expense delete?')}")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button(f"✅ {t('হ্যাঁ', 'Yes')}", key=f"yes_{exp['id']}"):
-                            delete_expense(exp['id'])
-                            st.session_state.pop(f"confirm_del_{exp['id']}", None)
-                            st.success(f"✅ {fmt(amt_v)} {t('টাকার খরচ ডিলিট হয়েছে!', 'Taka expense deleted!')}")
-                            time.sleep(0.5)
-                            st.rerun()
-                    with c2:
-                        if st.button(f"❌ {t('না', 'No')}", key=f"no_{exp['id']}"):
-                            st.session_state.pop(f"confirm_del_{exp['id']}", None)
-                            st.rerun()
-
+    # FIX #5: ফান্ড উত্তোলন — ব্যালেন্স ০ হলে হবে না
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
         st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
         cash = get_cash_balance()
@@ -1022,6 +1022,7 @@ def admin_panel():
                             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
                         st.success(f"✅ {fmt(amount)} {t('টাকা জমা হয়েছে!', 'Taka deposited!')}!")
+                        st.balloons()
                         time.sleep(1)
                         st.rerun()
                     else:
@@ -1141,13 +1142,127 @@ def admin_panel():
                     st.download_button("📥 Download PDF", pdf, "all_transactions.pdf", "application/pdf")
 
     elif f"📧 {t('ইমেইল টেস্ট', 'Email Test')}" in menu:
-        st.markdown(f"### 📧 {t('ইমেইল টেস্ট', 'Email Test')}")
-        test_email = st.text_input(t("টেস্ট ইমেইল", "Test Email"), placeholder="example@gmail.com")
-        if st.button("📨 টেস্ট পাঠান", type="primary"):
-            if send_test_email(test_email):
-                st.success("✅ ইমেইল পাঠানো হয়েছে!")
-            else:
-                st.error("❌ পাঠানো ব্যর্থ হয়েছে")
+        st.markdown(f"### 📧 {t('ইমেইল ব্যবস্থাপনা', 'Email Management')}")
+
+        tab_test, tab_notify = st.tabs([
+            f"🧪 {t('টেস্ট ইমেইল', 'Test Email')}",
+            f"📢 {t('নোটিফিকেশন পাঠান', 'Send Notification')}"
+        ])
+
+        # ── টেস্ট ইমেইল ──────────────────────────────────────────────
+        with tab_test:
+            st.markdown(f"#### 🧪 {t('টেস্ট ইমেইল', 'Test Email')}")
+            st.caption(t("ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে কিনা যাচাই করুন।",
+                         "Check if email configuration is working correctly."))
+            with st.form("form_test_email"):
+                test_email = st.text_input(
+                    t("প্রাপকের ইমেইল", "Recipient Email"),
+                    placeholder="example@gmail.com"
+                )
+                send_btn = st.form_submit_button(f"📨 {t('টেস্ট ইমেইল পাঠান', 'Send Test Email')}",
+                                                  type="primary", use_container_width=True)
+            if send_btn:
+                if not test_email or '@' not in test_email:
+                    st.error(t("❌ সঠিক ইমেইল ঠিকানা দিন।", "❌ Enter a valid email address."))
+                else:
+                    with st.spinner(t("পাঠানো হচ্ছে...", "Sending...")):
+                        ok, msg = send_test_email(test_email)
+                    if ok:
+                        st.success(f"✅ {test_email} — {t('সফলভাবে পাঠানো হয়েছে!', 'Sent successfully!')}")
+                    else:
+                        st.error(f"❌ {t('পাঠানো ব্যর্থ:', 'Failed:')} {msg}")
+
+        # ── নোটিফিকেশন পাঠানো ────────────────────────────────────────
+        with tab_notify:
+            st.markdown(f"#### 📢 {t('নোটিফিকেশন পাঠান', 'Send Notification')}")
+            st.caption(t(
+                "সদস্যদের বা যেকোনো ইমেইলে বার্তা পাঠান।",
+                "Send a message to members or any email address."
+            ))
+
+            # প্রাপক নির্বাচন
+            all_members_em = get_all_members()
+            members_with_email = [m for m in all_members_em if m.get('email') and '@' in str(m.get('email',''))]
+
+            recv_type = st.radio(
+                t("প্রাপক নির্বাচন", "Select Recipients"),
+                [
+                    t("সব সদস্য (যাদের ইমেইল আছে)", "All members (with email)"),
+                    t("নির্দিষ্ট সদস্য", "Specific member"),
+                    t("কাস্টম ইমেইল", "Custom email"),
+                ],
+                key="email_recv_type"
+            )
+
+            target_emails = []
+
+            if t("সব সদস্য", "All members") in recv_type:
+                if members_with_email:
+                    st.info(f"📋 {len(members_with_email)} জন সদস্যের ইমেইল পাওয়া গেছে।")
+                    target_emails = [m['email'] for m in members_with_email]
+                else:
+                    st.warning(t("⚠️ কোনো সদস্যের ইমেইল সংরক্ষিত নেই।", "⚠️ No member emails found."))
+
+            elif t("নির্দিষ্ট সদস্য", "Specific member") in recv_type:
+                if members_with_email:
+                    mem_opts = {f"{m['name']} ({m['id']}) — {m['email']}": m['email'] for m in members_with_email}
+                    sel_mem_em = st.selectbox(t("সদস্য নির্বাচন", "Select Member"), list(mem_opts.keys()), key="email_mem_sel")
+                    target_emails = [mem_opts[sel_mem_em]]
+                else:
+                    st.warning(t("⚠️ কোনো সদস্যের ইমেইল নেই।", "⚠️ No emails found."))
+
+            else:  # কাস্টম
+                custom_raw = st.text_area(
+                    t("ইমেইল ঠিকানা (প্রতিটি আলাদা লাইনে)", "Email addresses (one per line)"),
+                    placeholder="example1@gmail.com\nexample2@gmail.com",
+                    key="email_custom_input"
+                )
+                if custom_raw.strip():
+                    target_emails = [e.strip() for e in custom_raw.strip().splitlines() if '@' in e]
+
+            with st.form("form_notification"):
+                notif_subject = st.text_input(
+                    t("বিষয় (Subject)", "Subject"),
+                    value=f"📢 {SOMITI_NAME} — বিজ্ঞপ্তি",
+                    key="notif_subj"
+                )
+                notif_body = st.text_area(
+                    t("বার্তা লিখুন", "Write your message"),
+                    height=160,
+                    placeholder=t(
+                        "এখানে বার্তা লিখুন...\nযেমন: আগামী মাসের কিস্তি ১৫ তারিখের মধ্যে জমা দিন।",
+                        "Write message here...\ne.g. Please pay this month's installment by the 15th."
+                    ),
+                    key="notif_body"
+                )
+                send_notif_btn = st.form_submit_button(
+                    f"📨 {t('নোটিফিকেশন পাঠান', 'Send Notification')}",
+                    type="primary", use_container_width=True
+                )
+
+            if send_notif_btn:
+                if not target_emails:
+                    st.error(t("❌ কোনো প্রাপক নির্বাচন করা হয়নি।", "❌ No recipients selected."))
+                elif not notif_body.strip():
+                    st.error(t("❌ বার্তা লিখুন।", "❌ Please write a message."))
+                else:
+                    with st.spinner(t(f"{len(target_emails)} জনকে পাঠানো হচ্ছে...",
+                                      f"Sending to {len(target_emails)} recipient(s)...")):
+                        results = send_notification_email(target_emails, notif_subject, notif_body)
+
+                    ok_list  = [r for r in results if r['ok']]
+                    fail_list = [r for r in results if not r['ok']]
+
+                    if ok_list:
+                        st.success(f"✅ {len(ok_list)} জনকে সফলভাবে পাঠানো হয়েছে!")
+                        with st.expander("✅ সফল প্রাপকদের তালিকা", expanded=False):
+                            for r in ok_list:
+                                st.write(f"✅ {r['email']}")
+                    if fail_list:
+                        st.error(f"❌ {len(fail_list)} জনকে পাঠানো ব্যর্থ হয়েছে।")
+                        with st.expander("❌ ব্যর্থ তালিকা", expanded=True):
+                            for r in fail_list:
+                                st.write(f"❌ {r['email']} — {r['msg']}")
 
     elif f"🎲 {t('লটারি', 'Lottery')}" in menu:
         st.markdown(f"### 🎲 {t('লটারি', 'Lottery')}")
