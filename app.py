@@ -127,9 +127,52 @@ def check_and_archive_old_data():
         settings['start_date'] = datetime.now().strftime("%Y-%m-%d")
         save_settings(settings)
 
-# ==================== ইমেইল ====================
+# ==================== ইমেইল সিস্টেম ====================
+def _email_header():
+    return f"""
+    <div style="background:linear-gradient(135deg,#1a5276,#2980b9);padding:24px 30px;
+                border-radius:10px 10px 0 0;text-align:center;">
+      <h2 style="color:white;margin:0;font-size:22px;">🌾 {SOMITI_NAME} 🌾</h2>
+      <p style="color:#cce4f7;margin:6px 0 0 0;font-size:13px;">{SOMITI_NAME_EN} | সঞ্চয় ও ঋণ ব্যবস্থাপনা</p>
+    </div>"""
+
+def _email_footer():
+    return f"""
+    <div style="background:#f8f9fa;padding:14px 30px;border-radius:0 0 10px 10px;
+                border-top:1px solid #e0e0e0;text-align:center;">
+      <p style="color:#aaa;font-size:11px;margin:0;">
+        এই ইমেইলটি স্বয়ংক্রিয়ভাবে প্রেরিত। দয়া করে উত্তর দিবেন না।<br>
+        {SOMITI_NAME_EN} &nbsp;|&nbsp; {datetime.now().strftime('%d-%m-%Y %H:%M')}
+      </p>
+    </div>"""
+
+def _wrap_email(body_html):
+    return f"""
+    <html><head><meta charset="UTF-8"></head>
+    <body style="font-family:Arial,sans-serif;background:#f0f2f5;padding:30px;">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:10px;
+                  box-shadow:0 4px 15px rgba(0,0,0,0.1);overflow:hidden;">
+        {_email_header()}
+        <div style="padding:28px 30px;">
+          {body_html}
+        </div>
+        {_email_footer()}
+      </div>
+    </body></html>"""
+
+def _info_box(rows_html):
+    return f"""
+    <div style="background:#f4f8fb;border:1px solid #d0e4f0;border-radius:8px;
+                padding:16px 20px;margin:18px 0;">
+      {rows_html}
+    </div>"""
+
+def _row(label, value, color="#333"):
+    return f"""<p style="margin:6px 0;font-size:14px;color:#555;">
+      <b style="color:#1a5276;">{label}:</b>
+      <span style="color:{color};"> {value}</span></p>"""
+
 def send_email(to_email, subject, html_body):
-    """যেকোনো ইমেইল পাঠানোর মূল ফাংশন"""
     if not to_email or '@' not in str(to_email):
         return False, "ইমেইল ঠিকানা সঠিক নয়"
     try:
@@ -144,57 +187,265 @@ def send_email(to_email, subject, html_body):
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=20) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-        return True, "সফলভাবে পাঠানো হয়েছে"
-    except smtplib.SMTPAuthenticationError:
-        return False, "Gmail অথেনটিকেশন ব্যর্থ। App Password চেক করুন।"
-    except smtplib.SMTPException as e:
-        return False, f"SMTP Error: {str(e)}"
+        return True, "সফল"
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        err = str(e)
+        if 'authentication' in err.lower() or '535' in err:
+            return False, "Gmail App Password ভুল বা মেয়াদোত্তীর্ণ"
+        return False, err[:120]
 
-def send_test_email(to_email):
-    subject = f"🧪 ইমেইল টেস্ট — {SOMITI_NAME}"
-    html = f"""
-    <html><head><meta charset="UTF-8"></head>
-    <body style="font-family:Arial,sans-serif;padding:30px;background:#f5f5f5;">
-      <div style="max-width:500px;margin:auto;background:white;border-radius:12px;padding:30px;border:1px solid #ddd;">
-        <h2 style="color:#1a5276;">🌾 {SOMITI_NAME}</h2>
-        <p style="font-size:16px;">✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
-        <p style="color:#555;">এই ইমেইলটি একটি টেস্ট মেসেজ।</p>
-        <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
-        <p style="color:#999;font-size:12px;">{SOMITI_NAME_EN} | {datetime.now().strftime('%d-%m-%Y %H:%M')}</p>
+def send_emails_bulk(to_list, subject, html_body):
+    results = []
+    for em in to_list:
+        em = str(em).strip()
+        if '@' in em:
+            ok, msg = send_email(em, subject, html_body)
+            results.append({'email': em, 'ok': ok, 'msg': msg})
+    return results
+
+# ── ১. স্বাগতম ইমেইল ──────────────────────────────────────────
+def email_welcome(member):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    mid      = member.get('id','')
+    name     = member.get('name','')
+    password = member.get('password','')
+    monthly  = fmt(int(float(member.get('monthly_savings',500) or 500)))
+    app_url  = f"https://oiorganization2024.streamlit.app/?member={mid}"
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{name}</b>,</p>
+      <p style="color:#555;">আপনাকে <b>{SOMITI_NAME}</b> পরিবারে স্বাগতম জানাই।
+         আপনার সদস্যতা সফলভাবে সম্পন্ন হয়েছে।</p>
+      {_info_box(
+        _row("সদস্য আইডি", mid) +
+        _row("নাম", name) +
+        _row("পাসওয়ার্ড", f"<b>{password}</b>", "#c0392b") +
+        _row("মাসিক কিস্তি", f"{monthly} টাকা")
+      )}
+      <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;
+                  padding:14px 20px;margin:16px 0;">
+        <p style="margin:0 0 6px 0;font-size:13px;color:#2e7d32;"><b>🔐 লগইন লিংক:</b></p>
+        <a href="{app_url}" style="color:#1565c0;font-size:13px;word-break:break-all;">{app_url}</a>
       </div>
-    </body></html>
-    """
-    ok, msg = send_email(to_email, subject, html)
-    return ok, msg
+      <p style="color:#555;font-size:13px;">📌 <b>গুরুত্বপূর্ণ:</b></p>
+      <ul style="color:#555;font-size:13px;line-height:1.8;">
+        <li>প্রতি মাসের ১০ তারিখের মধ্যে কিস্তি জমা দিন</li>
+        <li>দেরিতে জমা দিলে লেট ফি প্রযোজ্য হবে</li>
+        <li>প্রথম লগইনে পাসওয়ার্ড পরিবর্তন করে নিন</li>
+      </ul>
+      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
+    return send_email(em, f"🎉 স্বাগতম — আপনার সদস্যতা সম্পন্ন হয়েছে | {SOMITI_NAME}", _wrap_email(body))
 
-def send_notification_email(to_emails, subject, message, sender_name="Admin"):
-    """নোটিফিকেশন ইমেইল — একাধিক প্রাপক"""
-    html = f"""
-    <html><head><meta charset="UTF-8"></head>
-    <body style="font-family:Arial,sans-serif;padding:30px;background:#f5f5f5;">
-      <div style="max-width:560px;margin:auto;background:white;border-radius:12px;
-                  padding:30px;border:1px solid #ddd;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-        <div style="background:linear-gradient(135deg,#1a5276,#2980b9);padding:20px;
-                    border-radius:8px;margin-bottom:24px;text-align:center;">
-          <h2 style="color:white;margin:0;">🌾 {SOMITI_NAME}</h2>
-          <p style="color:#cce;margin:6px 0 0 0;font-size:14px;">নোটিফিকেশন</p>
-        </div>
-        <p style="font-size:15px;line-height:1.7;color:#333;white-space:pre-wrap;">{message}</p>
-        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
-        <p style="color:#aaa;font-size:12px;text-align:center;">
-          পাঠিয়েছেন: {sender_name} &nbsp;|&nbsp; {datetime.now().strftime('%d %B %Y, %H:%M')}
-          <br>{SOMITI_NAME_EN}
+# ── ২. পাসওয়ার্ড পরিবর্তন (সদস্য নিজে) ─────────────────────
+def email_password_changed(member, new_password):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;">আপনার অ্যাকাউন্টের পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে।</p>
+      {_info_box(
+        _row("নতুন পাসওয়ার্ড", f"<b>{new_password}</b>", "#c0392b") +
+        _row("পরিবর্তনের সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
+      )}
+      <div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:12px 18px;margin:14px 0;">
+        <p style="color:#e65100;margin:0;font-size:13px;">⚠️ যদি আপনি নিজে এই পরিবর্তন না করে থাকেন,
+        তাহলে অবিলম্বে এডমিনকে জানান।</p>
+      </div>
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
+    return send_email(em, f"🔐 পাসওয়ার্ড পরিবর্তনের নোটিফিকেশন | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৩. এডমিন পাসওয়ার্ড রিসেট ───────────────────────────────
+def email_admin_password_reset(member, new_password):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    app_url = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;">এডমিন কর্তৃক আপনার পাসওয়ার্ড রিসেট করা হয়েছে।</p>
+      {_info_box(
+        _row("নতুন পাসওয়ার্ড", f"<b>{new_password}</b>", "#c0392b") +
+        _row("রিসেটের সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
+      )}
+      <p style="color:#555;font-size:13px;">লগইন করুন এবং দ্রুত পাসওয়ার্ড পরিবর্তন করুন।</p>
+      <a href="{app_url}" style="display:inline-block;background:#1a5276;color:white;
+         padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;margin-top:8px;">
+         🔐 লগইন করুন</a>
+      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
+    return send_email(em, f"🔑 নতুন পাসওয়ার্ড প্রদান করা হয়েছে | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৪. কিস্তি জমার রসিদ ────────────────────────────────────
+def email_deposit_receipt(member, amount, late_fee, month_name, year, deposit_date, total_savings):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    total = amount + late_fee
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;">আপনার কিস্তি জমার রসিদ নিচে দেওয়া হলো।</p>
+      {_info_box(
+        _row("সদস্যের নাম", member.get('name','')) +
+        _row("সদস্য আইডি", str(member.get('id',''))) +
+        _row("কিস্তির মাস", f"{month_name} {year}") +
+        _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা") +
+        _row("লেট ফি", f"{fmt(late_fee)} টাকা") +
+        _row("মোট জমা", f"<b>{fmt(total)} টাকা</b>", "#1e8449") +
+        _row("জমার তারিখ", deposit_date)
+      )}
+      <div style="background:#e8f5e9;border-radius:8px;padding:14px 20px;margin:14px 0;text-align:center;">
+        <p style="margin:0;color:#2e7d32;font-size:16px;">
+          📊 আপনার বর্তমান মোট সঞ্চয়: <b>{fmt(total_savings)} টাকা</b>
         </p>
       </div>
-    </body></html>
-    """
-    results = []
-    for email in to_emails:
-        ok, msg = send_email(email.strip(), subject, html)
-        results.append({'email': email.strip(), 'ok': ok, 'msg': msg})
-    return results
+      <p style="color:#555;font-size:13px;">নিয়মিত কিস্তি জমা দেওয়ার জন্য ধন্যবাদ।</p>
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
+    return send_email(em, f"🧾 কিস্তি জমার রসিদ — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৫. মাসিক রিমাইন্ডার ─────────────────────────────────────
+def email_monthly_reminder(member, month_name, year, monthly_amount):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    app_url = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
+    today   = datetime.now().strftime('%d-%m-%Y')
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;">এই স্মারকপত্রটি পাঠানো হচ্ছে কারণ <b>{month_name} {year}</b>
+         মাসের আপনার কিস্তিটি এখনও জমা হয়নি।</p>
+      {_info_box(
+        _row("কিস্তির মাস", f"{month_name} {year}") +
+        _row("কিস্তির পরিমাণ", f"{fmt(monthly_amount)} টাকা") +
+        _row("শেষ তারিখ", f"১০ {month_name} {year}") +
+        _row("আজকের তারিখ", today)
+      )}
+      <div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:12px 18px;margin:14px 0;">
+        <p style="color:#e65100;margin:0;font-size:13px;">⚠️ দেরিতে জমা দিলে লেট ফি প্রযোজ্য হবে।</p>
+      </div>
+      <a href="{app_url}" style="display:inline-block;background:#e67e22;color:white;
+         padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;">
+         💳 এখনই জমা দিন</a>
+      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
+    return send_email(em, f"⏰ কিস্তি রিমাইন্ডার — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৬. লেট ফি নোটিফিকেশন ───────────────────────────────────
+def email_late_fee(member, amount, late_fee, month_name, year, deposit_date):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    total = amount + late_fee
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;"><b>{month_name} {year}</b> মাসের কিস্তি নির্ধারিত সময়ের
+         পরে জমা দেওয়ায় লেট ফি যুক্ত হয়েছে।</p>
+      {_info_box(
+        _row("কিস্তির মাস", f"{month_name} {year}") +
+        _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা") +
+        _row("লেট ফি", f"<b>{fmt(late_fee)} টাকা</b>", "#c0392b") +
+        _row("মোট প্রদেয়", f"<b>{fmt(total)} টাকা</b>", "#1e8449") +
+        _row("জমার তারিখ", deposit_date) +
+        _row("নির্ধারিত তারিখ", f"১০ {month_name} {year}")
+      )}
+      <div style="background:#fce4ec;border:1px solid #f48fb1;border-radius:8px;padding:12px 18px;margin:14px 0;">
+        <p style="color:#880e4f;margin:0;font-size:13px;">📌 নিয়ম: প্রতি মাসের ১০ তারিখের মধ্যে কিস্তি জমা দিতে হবে।
+        পরবর্তী মাসে সময়মতো জমা দেওয়ার অনুরোধ করা হচ্ছে।</p>
+      </div>
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
+    return send_email(em, f"💸 লেট ফি নোটিফিকেশন — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৭. বার্ষিক রিপোর্ট ──────────────────────────────────────
+def email_annual_report(member, year, trans_list, total_savings):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    year_trans = [tr for tr in trans_list if str(tr.get('year','')) == str(year)]
+    total_deposited = sum(int(float(tr.get('amount',0))) for tr in year_trans)
+    total_late      = sum(int(float(tr.get('late_fee',0))) for tr in year_trans)
+    rows_html = ""
+    for mon_num, mon_name in BANGLA_MONTHS.items():
+        mon_deps = [tr for tr in year_trans if str(tr.get('month','')) == str(mon_num)]
+        if mon_deps:
+            amt = sum(int(float(tr.get('amount',0))) for tr in mon_deps)
+            rows_html += _row(mon_name, f"{fmt(amt)} টাকা")
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
+      <p style="color:#555;"><b>{year}</b> সালের আপনার বার্ষিক সঞ্চয় রিপোর্ট নিচে দেওয়া হলো।</p>
+      {_info_box(
+        _row("সদস্যের নাম", member.get('name','')) +
+        _row("সদস্য আইডি", str(member.get('id',''))) +
+        _row("বছর", str(year))
+      )}
+      <p style="font-size:14px;color:#1a5276;font-weight:bold;margin:16px 0 6px 0;">📈 মাসওয়ারি জমার বিবরণ:</p>
+      {_info_box(rows_html if rows_html else "<p style='color:#999;'>কোনো লেনদেন নেই</p>")}
+      {_info_box(
+        _row("মোট কিস্তি জমা", f"<b>{fmt(total_deposited)} টাকা</b>", "#1e8449") +
+        _row("মোট লেট ফি", f"{fmt(total_late)} টাকা", "#c0392b") +
+        _row("বর্তমান মোট সঞ্চয়", f"<b>{fmt(total_savings)} টাকা</b>", "#1565c0")
+      )}
+      <p style="color:#555;font-size:13px;">আগামী বছরেও আমাদের সাথে থাকার জন্য ধন্যবাদ।</p>
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
+    return send_email(em, f"📊 বার্ষিক সঞ্চয় রিপোর্ট — {year} | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৮. লটারি বিজয়ী ─────────────────────────────────────────
+def email_lottery_winner(member, month_name, year):
+    em = member.get('email','')
+    if not em or '@' not in str(em): return False, "ইমেইল নেই"
+    body = f"""
+      <div style="text-align:center;padding:10px 0 20px 0;">
+        <div style="font-size:50px;">🏆</div>
+        <h2 style="color:#e67e22;margin:8px 0;">অভিনন্দন!</h2>
+      </div>
+      <p style="font-size:15px;color:#333;text-align:center;">
+        প্রিয় <b>{member.get('name','')}</b>,<br>
+        আপনি আমাদের <b>{month_name} {year}</b> মাসের লটারিতে বিজয়ী হয়েছেন! 🎉
+      </p>
+      {_info_box(
+        _row("বিজয়ী সদস্য", member.get('name','')) +
+        _row("সদস্য আইডি", str(member.get('id',''))) +
+        _row("লটারির মাস", f"{month_name} {year}") +
+        _row("তারিখ", datetime.now().strftime('%d-%m-%Y'))
+      )}
+      <p style="color:#555;font-size:13px;text-align:center;">
+        পরবর্তী লটারিতে অংশ নিতে নিয়মিত কিস্তি জমা দিন।
+      </p>
+      <p style="color:#1a5276;font-weight:bold;text-align:center;">
+        ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
+    return send_email(em, f"🎲 অভিনন্দন! আপনি লটারিতে বিজয়ী | {SOMITI_NAME}", _wrap_email(body))
+
+# ── ৯. ফান্ড ট্রান্সফার নোটিফিকেশন ─────────────────────────
+def email_fund_transfer(tx_type, amount, description, prev_bal, new_bal, date_str, to_emails):
+    type_label = "➕ জমা" if tx_type == 'deposit' else "➖ উত্তোলন"
+    body = f"""
+      <p style="font-size:15px;color:#333;">প্রিয় সদস্যবৃন্দ / এডমিন,</p>
+      <p style="color:#555;">সংস্থার ফান্ডে নিম্নলিখিত লেনদেন সম্পন্ন হয়েছে।</p>
+      {_info_box(
+        _row("লেনদেনের ধরন", type_label) +
+        _row("পরিমাণ", f"<b>{fmt(amount)} টাকা</b>", "#1565c0") +
+        _row("তারিখ", date_str) +
+        _row("বিবরণ", description) +
+        _row("পূর্বের ব্যালেন্স", f"{fmt(prev_bal)} টাকা") +
+        _row("বর্তমান ব্যালেন্স", f"<b>{fmt(new_bal)} টাকা</b>", "#1e8449")
+      )}
+      <p style="color:#555;font-size:13px;">বিস্তারিত জানতে অ্যাপে লগইন করুন।</p>
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
+    html = _wrap_email(body)
+    subject = f"🏧 ফান্ড লেনদেনের নোটিফিকেশন ({type_label}) | {SOMITI_NAME}"
+    return send_emails_bulk(to_emails, subject, html)
+
+# ── ১০. টেস্ট ইমেইল ─────────────────────────────────────────
+def send_test_email(to_email):
+    body = f"""
+      <p style="font-size:16px;color:#333;">✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
+      <p style="color:#555;">এই ইমেইলটি একটি টেস্ট মেসেজ। সব ইমেইল ফিচার সক্রিয় আছে।</p>
+      {_info_box(
+        _row("SMTP সার্ভার", SMTP_SERVER) +
+        _row("Port", str(SMTP_PORT)) +
+        _row("প্রেরক", SENDER_EMAIL) +
+        _row("পাঠানোর সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
+      )}
+      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME}</p>"""
+    return send_email(to_email, f"🧪 ইমেইল টেস্ট | {SOMITI_NAME}", _wrap_email(body))
+
+def send_notification_email(to_emails, subject, message, sender_name="Admin"):
+    body = f"""
+      <p style="font-size:15px;color:#333;white-space:pre-wrap;">{message}</p>
+      <p style="color:#888;font-size:12px;margin-top:20px;">— পাঠিয়েছেন: {sender_name}</p>"""
+    html = _wrap_email(body)
+    return send_emails_bulk(to_emails, subject, html)
 
 # ==================== ইউটিলিটি ====================
 def generate_member_id():
@@ -564,10 +815,11 @@ def admin_panel():
                 f"💵 {t('টাকা জমা', 'Deposit')}",
                 f"🔄 {t('লেনদেন পরিবর্তন', 'Transactions')}",
                 f"💸 {t('ব্যয় হিসাব', 'Expenses')}",
+                f"📒 {t('ব্যয় তালিকা', 'Expense List')}",
                 f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}",
                 f"📊 {t('রিপোর্ট', 'Reports')}",
                 f"📥 {t('পিডিএফ ডাউনলোড', 'PDF Download')}",
-                f"📧 {t('ইমেইল টেস্ট', 'Email Test')}",
+                f"📧 {t('ইমেইল ব্যবস্থাপনা', 'Email Management')}",
                 f"🎲 {t('লটারি', 'Lottery')}",
                 f"🚪 {t('লগআউট', 'Logout')}"
             ],
@@ -611,6 +863,15 @@ def admin_panel():
                 })
                 st.success(f"✅ {t('সদস্য তৈরি', 'Member created')}!")
                 st.info(f"{t('আইডি', 'ID')}: {member_id} | {t('পাস', 'Pass')}: {password}")
+                # ── স্বাগতম ইমেইল ──
+                if email and '@' in str(email):
+                    new_mem = get_member_by_id(member_id)
+                    if new_mem:
+                        ok_em, msg_em = email_welcome(new_mem)
+                        if ok_em:
+                            st.success("📧 স্বাগতম ইমেইল পাঠানো হয়েছে!")
+                        else:
+                            st.warning(f"📧 ইমেইল পাঠানো যায়নি: {msg_em}")
                 st.balloons()
             else:
                 st.error(t("❌ নাম ও মোবাইল আবশ্যক", "❌ Name and mobile required"))
@@ -686,6 +947,12 @@ def admin_panel():
                             new_pass = generate_password()
                             update_member(member_id, {'password': new_pass})
                             st.success(f"✅ {t('নতুন পাস', 'New Pass')}: {new_pass}")
+                            # ── এডমিন রিসেট ইমেইল ──
+                            mem_for_email = get_member_by_id(member_id)
+                            if mem_for_email and mem_for_email.get('email') and '@' in str(mem_for_email.get('email','')):
+                                ok_em, msg_em = email_admin_password_reset(mem_for_email, new_pass)
+                                if ok_em:
+                                    st.info("📧 পাসওয়ার্ড রিসেট ইমেইল পাঠানো হয়েছে।")
                             st.session_state.pop(f"pass_{member_id}", None)
                             st.rerun()
         else:
@@ -759,10 +1026,27 @@ def admin_panel():
                             idx = df[df['id'] == um['id']].index
                             if len(idx) > 0:
                                 current_sav = int(float(df.loc[idx[0], 'total_savings'])) if pd.notna(df.loc[idx[0], 'total_savings']) else 0
-                                df.loc[idx[0], 'total_savings'] = int(current_sav + total)
+                                new_sav = int(current_sav + total)
+                                df.loc[idx[0], 'total_savings'] = new_sav
                                 save_df(df, MEMBERS_CSV)
+                            else:
+                                new_sav = total
 
                             st.success(f"✅ {fmt(total)} {t('টাকা জমা হয়েছে', 'Taka deposited')}!")
+
+                            # ── কিস্তি রসিদ ইমেইল ──
+                            mem_up = get_member_by_id(um['id'])
+                            if mem_up and mem_up.get('email') and '@' in str(mem_up.get('email','')):
+                                ok_r, _ = email_deposit_receipt(
+                                    mem_up, monthly_val, int(late_fee),
+                                    BANGLA_MONTHS[month], year, full_date, new_sav
+                                )
+                                if ok_r:
+                                    st.info("📧 কিস্তির রসিদ ইমেইল পাঠানো হয়েছে।")
+                                # ── লেট ফি ইমেইল (যদি লেট ফি > ০) ──
+                                if int(late_fee) > 0:
+                                    email_late_fee(mem_up, monthly_val, int(late_fee),
+                                                   BANGLA_MONTHS[month], year, full_date)
                             st.balloons()
                             time.sleep(1)
                             st.rerun()
@@ -1000,6 +1284,31 @@ def admin_panel():
                     st.error(t("❌ বিবরণ ও পরিমাণ দেওয়া আবশ্যক।", "❌ Description and amount are required."))
 
     # FIX #5: ফান্ড উত্তোলন — ব্যালেন্স ০ হলে হবে না
+    elif f"📒 {t('ব্যয় তালিকা', 'Expense List')}" in menu:
+        st.markdown(f"### 📒 {t('ব্যয় তালিকা', 'Expense List')}")
+        st.caption(t("এই তালিকা শুধু দেখার জন্য। এখান থেকে ডিলিট করা যাবে না।",
+                     "This list is read-only. Expenses cannot be deleted from here."))
+        expenses = get_all_expenses()
+        if not expenses:
+            st.info(t("📭 কোনো খরচ নেই। 'ব্যয় হিসাব' মেনু থেকে নতুন খরচ যোগ করুন।",
+                      "📭 No expenses. Add from 'Expenses' menu."))
+        else:
+            total_exp = sum(int(float(e.get('amount', 0))) for e in expenses)
+            c1, c2 = st.columns(2)
+            c1.metric(f"📊 {t('মোট খরচ', 'Total Expenses')}", f"{fmt(total_exp)} টাকা")
+            c2.metric(f"📋 {t('মোট রেকর্ড', 'Total Records')}", f"{len(expenses)} টি")
+            st.markdown("---")
+            tbl_exp = []
+            for exp in expenses:
+                av = int(float(exp['amount'])) if exp.get('amount') else 0
+                tbl_exp.append({
+                    t('তারিখ','Date'):        exp.get('date',''),
+                    t('ক্যাটাগরি','Category'): exp.get('category',''),
+                    t('বিবরণ','Description'):  str(exp.get('description',''))[:50],
+                    t('পরিমাণ','Amount'):      f"{fmt(av)} টাকা"
+                })
+            st.dataframe(pd.DataFrame(tbl_exp), use_container_width=True, hide_index=True, height=400)
+
     elif f"🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}" in menu:
         st.markdown(f"### 🏧 {t('ফান্ড ব্যবস্থাপনা', 'Fund Management')}")
         cash = get_cash_balance()
@@ -1015,13 +1324,19 @@ def admin_panel():
                 if st.form_submit_button("✅ জমা দিন"):
                     if amount > 0 and desc:
                         cur_bal = get_fund_balance()
+                        new_bal = int(cur_bal + amount)
                         add_fund_transaction({
                             'type': 'deposit', 'amount': int(amount), 'description': desc,
                             'date': datetime.now().strftime("%Y-%m-%d"),
-                            'previous_balance': cur_bal, 'current_balance': int(cur_bal + amount),
+                            'previous_balance': cur_bal, 'current_balance': new_bal,
                             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
                         st.success(f"✅ {fmt(amount)} {t('টাকা জমা হয়েছে!', 'Taka deposited!')}!")
+                        # ── ফান্ড ইমেইল ──
+                        all_em = [m.get('email','') for m in get_all_members() if m.get('email') and '@' in str(m.get('email',''))]
+                        all_em.append(SENDER_EMAIL)
+                        email_fund_transfer('deposit', int(amount), desc, cur_bal, new_bal,
+                                            datetime.now().strftime('%d-%m-%Y'), list(set(all_em)))
                         st.balloons()
                         time.sleep(1)
                         st.rerun()
@@ -1061,6 +1376,12 @@ def admin_panel():
                                     'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 })
                                 st.success(f"✅ {fmt(amount)} {t('টাকা উত্তোলন সম্পন্ন!', 'Taka withdrawn!')}!")
+                                # ── ফান্ড উত্তোলন ইমেইল ──
+                                all_em2 = [m.get('email','') for m in get_all_members() if m.get('email') and '@' in str(m.get('email',''))]
+                                all_em2.append(SENDER_EMAIL)
+                                email_fund_transfer('withdrawal', int(amount), desc, current_fund_balance,
+                                                    int(current_fund_balance - amount),
+                                                    date.strftime('%d-%m-%Y'), list(set(all_em2)))
                                 st.rerun()
                             else:
                                 st.error(t("❌ উত্তোলন সম্ভব হয়নি!", "❌ Withdrawal failed!"))
@@ -1141,127 +1462,151 @@ def admin_panel():
                     pdf = generate_pdf_transactions()
                     st.download_button("📥 Download PDF", pdf, "all_transactions.pdf", "application/pdf")
 
-    elif f"📧 {t('ইমেইল টেস্ট', 'Email Test')}" in menu:
+    elif f"📧 {t('ইমেইল ব্যবস্থাপনা', 'Email Management')}" in menu:
         st.markdown(f"### 📧 {t('ইমেইল ব্যবস্থাপনা', 'Email Management')}")
 
-        tab_test, tab_notify = st.tabs([
-            f"🧪 {t('টেস্ট ইমেইল', 'Test Email')}",
-            f"📢 {t('নোটিফিকেশন পাঠান', 'Send Notification')}"
+        tab_test, tab_remind, tab_annual, tab_notify = st.tabs([
+            f"🧪 {t('টেস্ট', 'Test')}",
+            f"⏰ {t('মাসিক রিমাইন্ডার', 'Monthly Reminder')}",
+            f"📊 {t('বার্ষিক রিপোর্ট', 'Annual Report')}",
+            f"📢 {t('নোটিফিকেশন', 'Notification')}"
         ])
 
-        # ── টেস্ট ইমেইল ──────────────────────────────────────────────
+        # ── টেস্ট ──────────────────────────────────────────────────
         with tab_test:
             st.markdown(f"#### 🧪 {t('টেস্ট ইমেইল', 'Test Email')}")
-            st.caption(t("ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে কিনা যাচাই করুন।",
-                         "Check if email configuration is working correctly."))
+            st.caption("ইমেইল সিস্টেম সঠিকভাবে কাজ করছে কিনা যাচাই করুন।")
             with st.form("form_test_email"):
-                test_email = st.text_input(
-                    t("প্রাপকের ইমেইল", "Recipient Email"),
-                    placeholder="example@gmail.com"
-                )
-                send_btn = st.form_submit_button(f"📨 {t('টেস্ট ইমেইল পাঠান', 'Send Test Email')}",
-                                                  type="primary", use_container_width=True)
-            if send_btn:
-                if not test_email or '@' not in test_email:
-                    st.error(t("❌ সঠিক ইমেইল ঠিকানা দিন।", "❌ Enter a valid email address."))
+                test_em = st.text_input(t("প্রাপকের ইমেইল", "Recipient Email"), placeholder="example@gmail.com")
+                send_t = st.form_submit_button(f"📨 {t('পাঠান', 'Send')}", type="primary", use_container_width=True)
+            if send_t:
+                if not test_em or '@' not in test_em:
+                    st.error(t("❌ সঠিক ইমেইল দিন।", "❌ Enter valid email."))
                 else:
                     with st.spinner(t("পাঠানো হচ্ছে...", "Sending...")):
-                        ok, msg = send_test_email(test_email)
-                    if ok:
-                        st.success(f"✅ {test_email} — {t('সফলভাবে পাঠানো হয়েছে!', 'Sent successfully!')}")
+                        ok_t, msg_t = send_test_email(test_em)
+                    if ok_t:
+                        st.success(f"✅ {test_em} — সফলভাবে পাঠানো হয়েছে!")
                     else:
-                        st.error(f"❌ {t('পাঠানো ব্যর্থ:', 'Failed:')} {msg}")
+                        st.error(f"❌ ব্যর্থ: {msg_t}")
 
-        # ── নোটিফিকেশন পাঠানো ────────────────────────────────────────
+        # ── মাসিক রিমাইন্ডার ────────────────────────────────────────
+        with tab_remind:
+            st.markdown(f"#### ⏰ {t('মাসিক কিস্তি রিমাইন্ডার', 'Monthly Installment Reminder')}")
+            st.caption("যেসব সদস্য এখনও এই মাসের কিস্তি দেননি তাদের রিমাইন্ডার ইমেইল পাঠান।")
+
+            cur_now   = datetime.now()
+            cur_mon   = BANGLA_MONTHS[cur_now.month]
+            cur_year  = cur_now.year
+            unpaid_em = get_unpaid_members()
+            unpaid_with_email = [m for m in unpaid_em if m.get('email') and '@' in str(m.get('email',''))]
+
+            st.info(f"📋 এই মাসে বকেয়া: **{len(unpaid_em)} জন** | ইমেইল আছে: **{len(unpaid_with_email)} জন**")
+
+            if unpaid_with_email:
+                with st.expander(f"👥 প্রাপকদের তালিকা ({len(unpaid_with_email)} জন)", expanded=False):
+                    for m in unpaid_with_email:
+                        st.write(f"👤 {m['name']} — {m['email']}")
+
+            if st.button(f"📨 {len(unpaid_with_email)} জনকে রিমাইন্ডার পাঠান",
+                         type="primary", use_container_width=True,
+                         disabled=(len(unpaid_with_email) == 0)):
+                sent_ok = sent_fail = 0
+                for mem_r in unpaid_with_email:
+                    mon_val = int(float(mem_r.get('monthly_savings', 500) or 500))
+                    ok_r, _ = email_monthly_reminder(mem_r, cur_mon, cur_year, mon_val)
+                    if ok_r: sent_ok += 1
+                    else:    sent_fail += 1
+                if sent_ok:
+                    st.success(f"✅ {sent_ok} জনকে রিমাইন্ডার পাঠানো হয়েছে!")
+                if sent_fail:
+                    st.warning(f"⚠️ {sent_fail} জনকে পাঠানো যায়নি।")
+
+            if not unpaid_with_email and unpaid_em:
+                st.warning("⚠️ বকেয়া সদস্যদের ইমেইল ঠিকানা নেই।")
+            elif not unpaid_em:
+                st.success("🎉 এই মাসে সবাই কিস্তি দিয়েছেন!")
+
+        # ── বার্ষিক রিপোর্ট ─────────────────────────────────────────
+        with tab_annual:
+            st.markdown(f"#### 📊 {t('বার্ষিক সঞ্চয় রিপোর্ট', 'Annual Savings Report')}")
+            st.caption("নির্বাচিত বছরের সঞ্চয় রিপোর্ট সকল সক্রিয় সদস্যদের ইমেইলে পাঠান।")
+
+            sel_year  = st.selectbox("বছর নির্বাচন করুন",
+                                     list(range(datetime.now().year, datetime.now().year - 5, -1)),
+                                     key="annual_year_sel")
+            act_mems  = [m for m in get_all_members() if str(m.get('status','')) == 'active']
+            em_mems   = [m for m in act_mems if m.get('email') and '@' in str(m.get('email',''))]
+            all_trans = load_df(TRANSACTIONS_CSV, TRANSACTION_COLS).to_dict('records') if os.path.exists(TRANSACTIONS_CSV) else []
+
+            st.info(f"📋 সক্রিয় সদস্য: **{len(act_mems)} জন** | ইমেইল আছে: **{len(em_mems)} জন**")
+
+            if st.button(f"📊 {sel_year} সালের রিপোর্ট {len(em_mems)} জনকে পাঠান",
+                         type="primary", use_container_width=True,
+                         disabled=(len(em_mems) == 0)):
+                sent_ok2 = sent_fail2 = 0
+                prog = st.progress(0)
+                for i, mem_a in enumerate(em_mems):
+                    sav = int(float(mem_a.get('total_savings', 0) or 0))
+                    ok_a, _ = email_annual_report(mem_a, sel_year, all_trans, sav)
+                    if ok_a: sent_ok2 += 1
+                    else:    sent_fail2 += 1
+                    prog.progress((i + 1) / len(em_mems))
+                if sent_ok2:
+                    st.success(f"✅ {sent_ok2} জনকে বার্ষিক রিপোর্ট পাঠানো হয়েছে!")
+                if sent_fail2:
+                    st.warning(f"⚠️ {sent_fail2} জনকে পাঠানো যায়নি।")
+
+        # ── কাস্টম নোটিফিকেশন ──────────────────────────────────────
         with tab_notify:
-            st.markdown(f"#### 📢 {t('নোটিফিকেশন পাঠান', 'Send Notification')}")
-            st.caption(t(
-                "সদস্যদের বা যেকোনো ইমেইলে বার্তা পাঠান।",
-                "Send a message to members or any email address."
-            ))
-
-            # প্রাপক নির্বাচন
-            all_members_em = get_all_members()
-            members_with_email = [m for m in all_members_em if m.get('email') and '@' in str(m.get('email',''))]
+            st.markdown(f"#### 📢 {t('কাস্টম নোটিফিকেশন', 'Custom Notification')}")
+            all_mems_n = get_all_members()
+            em_mems_n  = [m for m in all_mems_n if m.get('email') and '@' in str(m.get('email',''))]
 
             recv_type = st.radio(
-                t("প্রাপক নির্বাচন", "Select Recipients"),
-                [
-                    t("সব সদস্য (যাদের ইমেইল আছে)", "All members (with email)"),
-                    t("নির্দিষ্ট সদস্য", "Specific member"),
-                    t("কাস্টম ইমেইল", "Custom email"),
-                ],
-                key="email_recv_type"
+                t("প্রাপক", "Recipients"),
+                [t("সব সদস্য", "All members"), t("নির্দিষ্ট সদস্য", "Specific member"), t("কাস্টম ইমেইল", "Custom email")],
+                key="notif_recv"
             )
-
             target_emails = []
-
             if t("সব সদস্য", "All members") in recv_type:
-                if members_with_email:
-                    st.info(f"📋 {len(members_with_email)} জন সদস্যের ইমেইল পাওয়া গেছে।")
-                    target_emails = [m['email'] for m in members_with_email]
-                else:
-                    st.warning(t("⚠️ কোনো সদস্যের ইমেইল সংরক্ষিত নেই।", "⚠️ No member emails found."))
-
+                st.info(f"📋 {len(em_mems_n)} জন সদস্যের ইমেইল পাওয়া গেছে।")
+                target_emails = [m['email'] for m in em_mems_n]
             elif t("নির্দিষ্ট সদস্য", "Specific member") in recv_type:
-                if members_with_email:
-                    mem_opts = {f"{m['name']} ({m['id']}) — {m['email']}": m['email'] for m in members_with_email}
-                    sel_mem_em = st.selectbox(t("সদস্য নির্বাচন", "Select Member"), list(mem_opts.keys()), key="email_mem_sel")
-                    target_emails = [mem_opts[sel_mem_em]]
+                if em_mems_n:
+                    opts = {f"{m['name']} ({m['id']}) — {m['email']}": m['email'] for m in em_mems_n}
+                    sel_n = st.selectbox(t("সদস্য নির্বাচন", "Select"), list(opts.keys()), key="notif_mem")
+                    target_emails = [opts[sel_n]]
                 else:
-                    st.warning(t("⚠️ কোনো সদস্যের ইমেইল নেই।", "⚠️ No emails found."))
+                    st.warning("⚠️ কোনো সদস্যের ইমেইল নেই।")
+            else:
+                raw = st.text_area(t("ইমেইল (প্রতিটি আলাদা লাইনে)", "Emails (one per line)"),
+                                   placeholder="a@gmail.com\nb@gmail.com", key="notif_custom")
+                if raw.strip():
+                    target_emails = [e.strip() for e in raw.splitlines() if '@' in e]
 
-            else:  # কাস্টম
-                custom_raw = st.text_area(
-                    t("ইমেইল ঠিকানা (প্রতিটি আলাদা লাইনে)", "Email addresses (one per line)"),
-                    placeholder="example1@gmail.com\nexample2@gmail.com",
-                    key="email_custom_input"
-                )
-                if custom_raw.strip():
-                    target_emails = [e.strip() for e in custom_raw.strip().splitlines() if '@' in e]
+            with st.form("form_notif"):
+                n_subj = st.text_input(t("বিষয়", "Subject"), value=f"📢 {SOMITI_NAME} — বিজ্ঞপ্তি")
+                n_body = st.text_area(t("বার্তা", "Message"), height=150,
+                                      placeholder="এখানে বার্তা লিখুন...")
+                send_n = st.form_submit_button(f"📨 {t('পাঠান', 'Send')}", type="primary", use_container_width=True)
 
-            with st.form("form_notification"):
-                notif_subject = st.text_input(
-                    t("বিষয় (Subject)", "Subject"),
-                    value=f"📢 {SOMITI_NAME} — বিজ্ঞপ্তি",
-                    key="notif_subj"
-                )
-                notif_body = st.text_area(
-                    t("বার্তা লিখুন", "Write your message"),
-                    height=160,
-                    placeholder=t(
-                        "এখানে বার্তা লিখুন...\nযেমন: আগামী মাসের কিস্তি ১৫ তারিখের মধ্যে জমা দিন।",
-                        "Write message here...\ne.g. Please pay this month's installment by the 15th."
-                    ),
-                    key="notif_body"
-                )
-                send_notif_btn = st.form_submit_button(
-                    f"📨 {t('নোটিফিকেশন পাঠান', 'Send Notification')}",
-                    type="primary", use_container_width=True
-                )
-
-            if send_notif_btn:
+            if send_n:
                 if not target_emails:
-                    st.error(t("❌ কোনো প্রাপক নির্বাচন করা হয়নি।", "❌ No recipients selected."))
-                elif not notif_body.strip():
-                    st.error(t("❌ বার্তা লিখুন।", "❌ Please write a message."))
+                    st.error("❌ কোনো প্রাপক নেই।")
+                elif not n_body.strip():
+                    st.error("❌ বার্তা লিখুন।")
                 else:
-                    with st.spinner(t(f"{len(target_emails)} জনকে পাঠানো হচ্ছে...",
-                                      f"Sending to {len(target_emails)} recipient(s)...")):
-                        results = send_notification_email(target_emails, notif_subject, notif_body)
-
-                    ok_list  = [r for r in results if r['ok']]
-                    fail_list = [r for r in results if not r['ok']]
-
-                    if ok_list:
-                        st.success(f"✅ {len(ok_list)} জনকে সফলভাবে পাঠানো হয়েছে!")
-                        with st.expander("✅ সফল প্রাপকদের তালিকা", expanded=False):
-                            for r in ok_list:
-                                st.write(f"✅ {r['email']}")
-                    if fail_list:
-                        st.error(f"❌ {len(fail_list)} জনকে পাঠানো ব্যর্থ হয়েছে।")
-                        with st.expander("❌ ব্যর্থ তালিকা", expanded=True):
-                            for r in fail_list:
+                    with st.spinner(f"{len(target_emails)} জনকে পাঠানো হচ্ছে..."):
+                        res = send_notification_email(target_emails, n_subj, n_body)
+                    ok_n  = [r for r in res if r['ok']]
+                    bad_n = [r for r in res if not r['ok']]
+                    if ok_n:
+                        st.success(f"✅ {len(ok_n)} জনকে পাঠানো হয়েছে!")
+                    if bad_n:
+                        st.error(f"❌ {len(bad_n)} জনকে পাঠানো যায়নি।")
+                        with st.expander("ব্যর্থ তালিকা"):
+                            for r in bad_n:
                                 st.write(f"❌ {r['email']} — {r['msg']}")
 
     elif f"🎲 {t('লটারি', 'Lottery')}" in menu:
@@ -1271,6 +1616,12 @@ def admin_panel():
             if winner:
                 st.balloons()
                 st.success(f"🎉 বিজয়ী: {winner['name']} (আইডি: {winner['id']})")
+                # ── লটারি বিজয়ী ইমেইল ──
+                if winner.get('email') and '@' in str(winner.get('email','')):
+                    cur_m = datetime.now()
+                    ok_l, _ = email_lottery_winner(winner, BANGLA_MONTHS[cur_m.month], cur_m.year)
+                    if ok_l:
+                        st.info(f"📧 বিজয়ী {winner['name']}-কে অভিনন্দন ইমেইল পাঠানো হয়েছে।")
             else:
                 st.error(t("কোনো সক্রিয় সদস্য নেই", "No active members"))
 
@@ -1366,6 +1717,9 @@ def member_dashboard_view():
             if new_pass and new_pass == confirm:
                 update_member(member['id'], {'password': new_pass})
                 st.success("✅ পাসওয়ার্ড পরিবর্তন হয়েছে!")
+                # ── পাসওয়ার্ড পরিবর্তন ইমেইল ──
+                if member.get('email') and '@' in str(member.get('email','')):
+                    email_password_changed(member, new_pass)
             else:
                 st.error("❌ পাসওয়ার্ড মিলছে না")
 
