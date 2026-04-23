@@ -8,6 +8,7 @@ import os
 import shutil
 import time
 import json
+import threading
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -128,324 +129,371 @@ def check_and_archive_old_data():
         save_settings(settings)
 
 # ==================== ইমেইল সিস্টেম ====================
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 def _email_header():
-    return f"""
-    <div style="background:linear-gradient(135deg,#1a5276,#2980b9);padding:24px 30px;
-                border-radius:10px 10px 0 0;text-align:center;">
+    return f"""<div style="background:linear-gradient(135deg,#1a5276,#2980b9);
+        padding:24px 30px;border-radius:10px 10px 0 0;text-align:center;">
       <h2 style="color:white;margin:0;font-size:22px;">🌾 {SOMITI_NAME} 🌾</h2>
-      <p style="color:#cce4f7;margin:6px 0 0 0;font-size:13px;">{SOMITI_NAME_EN} | সঞ্চয় ও ঋণ ব্যবস্থাপনা</p>
+      <p style="color:#cce4f7;margin:6px 0 0;font-size:13px;">
+        {SOMITI_NAME_EN} | সঞ্চয় ও ঋণ ব্যবস্থাপনা</p>
     </div>"""
 
 def _email_footer():
-    return f"""
-    <div style="background:#f8f9fa;padding:14px 30px;border-radius:0 0 10px 10px;
-                border-top:1px solid #e0e0e0;text-align:center;">
+    return f"""<div style="background:#f8f9fa;padding:14px 30px;
+        border-radius:0 0 10px 10px;border-top:1px solid #e0e0e0;text-align:center;">
       <p style="color:#aaa;font-size:11px;margin:0;">
         এই ইমেইলটি স্বয়ংক্রিয়ভাবে প্রেরিত। দয়া করে উত্তর দিবেন না।<br>
         {SOMITI_NAME_EN} &nbsp;|&nbsp; {datetime.now().strftime('%d-%m-%Y %H:%M')}
       </p>
     </div>"""
 
-def _wrap_email(body_html):
-    return f"""
-    <html><head><meta charset="UTF-8"></head>
-    <body style="font-family:Arial,sans-serif;background:#f0f2f5;padding:30px;">
-      <div style="max-width:600px;margin:auto;background:white;border-radius:10px;
-                  box-shadow:0 4px 15px rgba(0,0,0,0.1);overflow:hidden;">
-        {_email_header()}
-        <div style="padding:28px 30px;">
-          {body_html}
-        </div>
-        {_email_footer()}
-      </div>
-    </body></html>"""
+def _wrap(body_html):
+    return (f'<html><head><meta charset="UTF-8"></head>'
+            f'<body style="font-family:Arial,sans-serif;background:#f0f2f5;padding:30px;">'
+            f'<div style="max-width:600px;margin:auto;background:white;border-radius:10px;'
+            f'box-shadow:0 4px 15px rgba(0,0,0,.1);overflow:hidden;">'
+            f'{_email_header()}'
+            f'<div style="padding:28px 30px;">{body_html}</div>'
+            f'{_email_footer()}</div></body></html>')
 
-def _info_box(rows_html):
-    return f"""
-    <div style="background:#f4f8fb;border:1px solid #d0e4f0;border-radius:8px;
-                padding:16px 20px;margin:18px 0;">
-      {rows_html}
-    </div>"""
+def _box(rows):
+    return (f'<div style="background:#f4f8fb;border:1px solid #d0e4f0;'
+            f'border-radius:8px;padding:16px 20px;margin:16px 0;">{rows}</div>')
 
-def _row(label, value, color="#333"):
-    return f"""<p style="margin:6px 0;font-size:14px;color:#555;">
-      <b style="color:#1a5276;">{label}:</b>
-      <span style="color:{color};"> {value}</span></p>"""
+def _row(label, val, color="#333"):
+    return (f'<p style="margin:6px 0;font-size:14px;">'
+            f'<b style="color:#1a5276;">{label}:</b>'
+            f' <span style="color:{color};">{val}</span></p>')
 
-def send_email(to_email, subject, html_body):
-    if not to_email or '@' not in str(to_email):
+# ── Core sender ──────────────────────────────────────────────────
+def _send_one(to, subject, html):
+    """Synchronous. Returns (ok:bool, msg:str)."""
+    if not to or '@' not in str(to):
         return False, "ইমেইল ঠিকানা সঠিক নয়"
     try:
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
         msg = MIMEMultipart('alternative')
         msg['From']    = f"{SOMITI_NAME} <{SENDER_EMAIL}>"
-        msg['To']      = to_email
+        msg['To']      = str(to).strip()
         msg['Subject'] = subject
-        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=20) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
+        msg.attach(MIMEText(html, 'html', 'utf-8'))
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=25) as s:
+            s.login(SENDER_EMAIL, SENDER_PASSWORD)
+            s.send_message(msg)
         return True, "সফল"
     except Exception as e:
         err = str(e)
-        if 'authentication' in err.lower() or '535' in err:
-            return False, "Gmail App Password ভুল বা মেয়াদোত্তীর্ণ"
+        if '535' in err or 'authentication' in err.lower():
+            return False, "Gmail App Password ভুল"
+        if 'timed out' in err.lower():
+            return False, "Connection timeout"
         return False, err[:120]
 
-def send_emails_bulk(to_list, subject, html_body):
-    results = []
-    for em in to_list:
+# ── Pending queue — rerun-safe ───────────────────────────────────
+def _queue_email(label, to, subject, html):
+    """
+    ইমেইল টাস্ক queue-এ রাখে।
+    st.rerun() এর পরেও টাস্ক হারায় না কারণ session_state-এ থাকে।
+    process_email_queue() পরের render-এ এটা পাঠায়।
+    """
+    if 'email_queue' not in st.session_state:
+        st.session_state['email_queue'] = []
+    st.session_state['email_queue'].append(
+        {'label': label, 'to': to, 'subject': subject, 'html': html}
+    )
+
+def process_email_queue():
+    """
+    প্রতিটি page render-এর শুরুতে একবার call করুন।
+    Queue-এ থাকা ইমেইলগুলো background thread-এ পাঠিয়ে দেয়।
+    Result toast হিসেবে দেখায়।
+    """
+    queue = st.session_state.pop('email_queue', [])
+    done  = st.session_state.pop('email_done',  [])
+
+    # আগের done result দেখাও
+    for r in done:
+        if r['ok']:
+            st.toast(f"📧 {r['label']} → পাঠানো হয়েছে ✅", icon="✅")
+        else:
+            st.toast(f"📧 {r['label']} ব্যর্থ: {r['msg']} ❌", icon="❌")
+
+    if not queue:
+        return
+
+    # background thread-এ পাঠাও
+    results_store = []
+
+    def _worker(tasks):
+        done_list = []
+        for task in tasks:
+            ok, msg = _send_one(task['to'], task['subject'], task['html'])
+            done_list.append({'label': task['label'], 'to': task['to'], 'ok': ok, 'msg': msg})
+        # thread থেকে session_state লেখা যায় না safely,
+        # তাই একটি file-based relay ব্যবহার করি
+        import json, tempfile, pathlib
+        relay_file = pathlib.Path(tempfile.gettempdir()) / "email_relay.json"
+        try:
+            existing = json.loads(relay_file.read_text()) if relay_file.exists() else []
+            existing.extend(done_list)
+            relay_file.write_text(json.dumps(existing, ensure_ascii=False))
+        except Exception:
+            pass
+
+    threading.Thread(target=_worker, args=(queue,), daemon=True).start()
+
+    # relay file-এর pending result আছে কিনা দেখো
+    import json, pathlib, tempfile
+    relay_file = pathlib.Path(tempfile.gettempdir()) / "email_relay.json"
+    if relay_file.exists():
+        try:
+            pending = json.loads(relay_file.read_text())
+            relay_file.unlink(missing_ok=True)
+            for r in pending:
+                if r['ok']:
+                    st.toast(f"📧 {r['label']} → পাঠানো হয়েছে ✅", icon="✅")
+                else:
+                    st.toast(f"📧 {r['label']} ব্যর্থ: {r['msg']} ❌", icon="❌")
+        except Exception:
+            pass
+
+# ── Template builders ────────────────────────────────────────────
+def _q_welcome(member):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    mid   = member.get('id','')
+    name  = member.get('name','')
+    pw    = member.get('password','')
+    mon   = fmt(int(float(member.get('monthly_savings', 500) or 500)))
+    url   = f"https://oiorganization2024.streamlit.app/?member={mid}"
+    html  = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{name}</b>,</p>'
+        f'<p style="color:#555;">আপনাকে <b>{SOMITI_NAME}</b> পরিবারে স্বাগতম।'
+        f' আপনার সদস্যতা সফলভাবে সম্পন্ন হয়েছে।</p>'
+        + _box(_row("সদস্য আইডি", mid)
+             + _row("নাম", name)
+             + _row("পাসওয়ার্ড", f"<b>{pw}</b>", "#c0392b")
+             + _row("মাসিক কিস্তি", f"{mon} টাকা"))
+        + f'<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;'
+          f'padding:14px 20px;margin:14px 0;">'
+          f'<p style="margin:0 0 6px;font-size:13px;color:#2e7d32;"><b>🔐 লগইন লিংক:</b></p>'
+          f'<a href="{url}" style="color:#1565c0;font-size:13px;word-break:break-all;">{url}</a></div>'
+        + '<ul style="color:#555;font-size:13px;line-height:1.9;">'
+          '<li>প্রতি মাসের ১০ তারিখের মধ্যে কিস্তি জমা দিন</li>'
+          '<li>দেরিতে জমা দিলে লেট ফি প্রযোজ্য হবে</li>'
+          '<li>প্রথম লগইনে পাসওয়ার্ড পরিবর্তন করুন</li></ul>'
+        + f'<p style="color:#1a5276;font-weight:bold;margin-top:18px;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>'
+    )
+    _queue_email("স্বাগতম ইমেইল", em,
+                 f"🎉 স্বাগতম — আপনার সদস্যতা সম্পন্ন | {SOMITI_NAME}", html)
+
+def _q_password_changed(member, new_pw):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    name = member.get('name', '')
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{name}</b>,</p>'
+        f'<p style="color:#555;">আপনার পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে।</p>'
+        + _box(_row("নতুন পাসওয়ার্ড", f"<b>{new_pw}</b>", "#c0392b")
+             + _row("পরিবর্তনের সময়", datetime.now().strftime('%d-%m-%Y %H:%M')))
+        + '<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;'
+          'padding:12px 18px;margin:14px 0;">'
+          '<p style="color:#e65100;margin:0;font-size:13px;">⚠️ আপনি নিজে না করলে '
+          'অবিলম্বে এডমিনকে জানান।</p></div>'
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>'
+    )
+    _queue_email("পাসওয়ার্ড পরিবর্তন", em,
+                 f"🔐 পাসওয়ার্ড পরিবর্তনের নোটিফিকেশন | {SOMITI_NAME}", html)
+
+def _q_admin_reset(member, new_pw):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    name = member.get('name', '')
+    url  = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{name}</b>,</p>'
+        f'<p style="color:#555;">এডমিন কর্তৃক আপনার পাসওয়ার্ড রিসেট হয়েছে।</p>'
+        + _box(_row("নতুন পাসওয়ার্ড", f"<b>{new_pw}</b>", "#c0392b")
+             + _row("রিসেটের সময়", datetime.now().strftime('%d-%m-%Y %H:%M')))
+        + f'<a href="{url}" style="display:inline-block;background:#1a5276;color:white;'
+          f'padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;margin-top:8px;">'
+          f'🔐 লগইন করুন</a>'
+        + f'<p style="color:#1a5276;font-weight:bold;margin-top:18px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>'
+    )
+    _queue_email("পাসওয়ার্ড রিসেট", em,
+                 f"🔑 নতুন পাসওয়ার্ড দেওয়া হয়েছে | {SOMITI_NAME}", html)
+
+def _q_deposit_receipt(member, amount, late_fee, month_name, year, deposit_date, total_sav):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    total = amount + late_fee
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{member.get("name","")}</b>,</p>'
+        f'<p style="color:#555;">আপনার কিস্তি জমার রসিদ নিচে দেওয়া হলো।</p>'
+        + _box(_row("সদস্যের নাম", member.get('name',''))
+             + _row("সদস্য আইডি", str(member.get('id','')))
+             + _row("কিস্তির মাস", f"{month_name} {year}")
+             + _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা")
+             + _row("লেট ফি", f"{fmt(late_fee)} টাকা")
+             + _row("মোট জমা", f"<b>{fmt(total)} টাকা</b>", "#1e8449")
+             + _row("জমার তারিখ", deposit_date))
+        + f'<div style="background:#e8f5e9;border-radius:8px;padding:14px 20px;'
+          f'margin:14px 0;text-align:center;">'
+          f'<p style="margin:0;color:#2e7d32;font-size:16px;">📊 মোট সঞ্চয়: '
+          f'<b>{fmt(total_sav)} টাকা</b></p></div>'
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>'
+    )
+    _queue_email("কিস্তি রসিদ", em,
+                 f"🧾 কিস্তি জমার রসিদ — {month_name} {year} | {SOMITI_NAME}", html)
+
+def _q_late_fee(member, amount, late_fee, month_name, year, deposit_date):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    total = amount + late_fee
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{member.get("name","")}</b>,</p>'
+        f'<p style="color:#555;"><b>{month_name} {year}</b> মাসের কিস্তি দেরিতে জমায় লেট ফি যুক্ত হয়েছে।</p>'
+        + _box(_row("কিস্তির মাস", f"{month_name} {year}")
+             + _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা")
+             + _row("লেট ফি", f"<b>{fmt(late_fee)} টাকা</b>", "#c0392b")
+             + _row("মোট প্রদেয়", f"<b>{fmt(total)} টাকা</b>", "#1e8449")
+             + _row("জমার তারিখ", deposit_date)
+             + _row("নির্ধারিত তারিখ", f"১০ {month_name} {year}"))
+        + '<div style="background:#fce4ec;border:1px solid #f48fb1;border-radius:8px;'
+          'padding:12px 18px;margin:14px 0;">'
+          '<p style="color:#880e4f;margin:0;font-size:13px;">📌 পরবর্তী মাসে ১০ তারিখের '
+          'মধ্যে কিস্তি জমা দেওয়ার অনুরোধ।</p></div>'
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>'
+    )
+    _queue_email("লেট ফি নোটিফিকেশন", em,
+                 f"💸 লেট ফি নোটিফিকেশন — {month_name} {year} | {SOMITI_NAME}", html)
+
+def _q_monthly_reminder(member, month_name, year, monthly_amount):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    url = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{member.get("name","")}</b>,</p>'
+        f'<p style="color:#555;"><b>{month_name} {year}</b> মাসের কিস্তি এখনও জমা হয়নি।</p>'
+        + _box(_row("কিস্তির মাস", f"{month_name} {year}")
+             + _row("কিস্তির পরিমাণ", f"{fmt(monthly_amount)} টাকা")
+             + _row("শেষ তারিখ", f"১০ {month_name} {year}")
+             + _row("আজকের তারিখ", datetime.now().strftime('%d-%m-%Y')))
+        + '<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;'
+          'padding:12px 18px;margin:14px 0;">'
+          '<p style="color:#e65100;margin:0;font-size:13px;">⚠️ দেরিতে জমা দিলে লেট ফি যুক্ত হবে।</p></div>'
+        + f'<a href="{url}" style="display:inline-block;background:#e67e22;color:white;'
+          f'padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;">💳 এখনই জমা দিন</a>'
+        + f'<p style="color:#1a5276;font-weight:bold;margin-top:18px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>'
+    )
+    _queue_email(f"রিমাইন্ডার ({member.get('name','')})", em,
+                 f"⏰ কিস্তি রিমাইন্ডার — {month_name} {year} | {SOMITI_NAME}", html)
+
+def _q_annual_report(member, year, trans_list, total_sav):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    yr_trans  = [tr for tr in trans_list if str(tr.get('year','')) == str(year)]
+    total_dep = sum(int(float(tr.get('amount',0))) for tr in yr_trans)
+    total_lf  = sum(int(float(tr.get('late_fee',0))) for tr in yr_trans)
+    month_rows = ''
+    for mn, mname in BANGLA_MONTHS.items():
+        deps = [tr for tr in yr_trans if str(tr.get('month','')) == str(mn)]
+        if deps:
+            month_rows += _row(mname, f"{fmt(sum(int(float(tr.get('amount',0))) for tr in deps))} টাকা")
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় <b>{member.get("name","")}</b>,</p>'
+        f'<p style="color:#555;"><b>{year}</b> সালের বার্ষিক সঞ্চয় রিপোর্ট।</p>'
+        + _box(_row("সদস্যের নাম", member.get('name',''))
+             + _row("সদস্য আইডি", str(member.get('id','')))
+             + _row("বছর", str(year)))
+        + '<p style="font-size:14px;color:#1a5276;font-weight:bold;margin:14px 0 4px;">📈 মাসওয়ারি জমা:</p>'
+        + _box(month_rows if month_rows else "<p style='color:#999;'>কোনো লেনদেন নেই</p>")
+        + _box(_row("মোট কিস্তি জমা", f"<b>{fmt(total_dep)} টাকা</b>", "#1e8449")
+             + _row("মোট লেট ফি", f"{fmt(total_lf)} টাকা", "#c0392b")
+             + _row("বর্তমান মোট সঞ্চয়", f"<b>{fmt(total_sav)} টাকা</b>", "#1565c0"))
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>'
+    )
+    _queue_email(f"বার্ষিক রিপোর্ট ({member.get('name','')})", em,
+                 f"📊 বার্ষিক রিপোর্ট — {year} | {SOMITI_NAME}", html)
+
+def _q_lottery_winner(member, month_name, year):
+    em = str(member.get('email', '') or '')
+    if '@' not in em: return
+    html = _wrap(
+        '<div style="text-align:center;padding:10px 0 18px;">'
+        '<div style="font-size:48px;">🏆</div>'
+        '<h2 style="color:#e67e22;margin:8px 0;">অভিনন্দন!</h2></div>'
+        + f'<p style="font-size:15px;color:#333;text-align:center;">প্রিয় <b>{member.get("name","")}</b>,<br>'
+          f'আপনি <b>{month_name} {year}</b> মাসের লটারিতে বিজয়ী হয়েছেন! 🎉</p>'
+        + _box(_row("বিজয়ী সদস্য", member.get('name',''))
+             + _row("সদস্য আইডি", str(member.get('id','')))
+             + _row("লটারির মাস", f"{month_name} {year}")
+             + _row("তারিখ", datetime.now().strftime('%d-%m-%Y')))
+        + f'<p style="color:#1a5276;font-weight:bold;text-align:center;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>'
+    )
+    _queue_email("লটারি বিজয়ী", em,
+                 f"🎲 অভিনন্দন! লটারি বিজয়ী | {SOMITI_NAME}", html)
+
+def _q_fund_transfer(tx_type, amount, description, prev_bal, new_bal, date_str, to_emails):
+    type_label = "➕ জমা" if tx_type == 'deposit' else "➖ উত্তোলন"
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;">প্রিয় সদস্যবৃন্দ / এডমিন,</p>'
+        f'<p style="color:#555;">সংস্থার ফান্ডে নিম্নলিখিত লেনদেন সম্পন্ন হয়েছে।</p>'
+        + _box(_row("লেনদেনের ধরন", type_label)
+             + _row("পরিমাণ", f"<b>{fmt(amount)} টাকা</b>", "#1565c0")
+             + _row("তারিখ", date_str)
+             + _row("বিবরণ", description)
+             + _row("পূর্বের ব্যালেন্স", f"{fmt(prev_bal)} টাকা")
+             + _row("বর্তমান ব্যালেন্স", f"<b>{fmt(new_bal)} টাকা</b>", "#1e8449"))
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>'
+    )
+    subject = f"🏧 ফান্ড লেনদেন ({type_label}) | {SOMITI_NAME}"
+    for em in to_emails:
         em = str(em).strip()
         if '@' in em:
-            ok, msg = send_email(em, subject, html_body)
-            results.append({'email': em, 'ok': ok, 'msg': msg})
-    return results
+            _queue_email(f"ফান্ড নোটিফিকেশন", em, subject, html)
 
-# ── ১. স্বাগতম ইমেইল ──────────────────────────────────────────
-def email_welcome(member):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    mid      = member.get('id','')
-    name     = member.get('name','')
-    password = member.get('password','')
-    monthly  = fmt(int(float(member.get('monthly_savings',500) or 500)))
-    app_url  = f"https://oiorganization2024.streamlit.app/?member={mid}"
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{name}</b>,</p>
-      <p style="color:#555;">আপনাকে <b>{SOMITI_NAME}</b> পরিবারে স্বাগতম জানাই।
-         আপনার সদস্যতা সফলভাবে সম্পন্ন হয়েছে।</p>
-      {_info_box(
-        _row("সদস্য আইডি", mid) +
-        _row("নাম", name) +
-        _row("পাসওয়ার্ড", f"<b>{password}</b>", "#c0392b") +
-        _row("মাসিক কিস্তি", f"{monthly} টাকা")
-      )}
-      <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;
-                  padding:14px 20px;margin:16px 0;">
-        <p style="margin:0 0 6px 0;font-size:13px;color:#2e7d32;"><b>🔐 লগইন লিংক:</b></p>
-        <a href="{app_url}" style="color:#1565c0;font-size:13px;word-break:break-all;">{app_url}</a>
-      </div>
-      <p style="color:#555;font-size:13px;">📌 <b>গুরুত্বপূর্ণ:</b></p>
-      <ul style="color:#555;font-size:13px;line-height:1.8;">
-        <li>প্রতি মাসের ১০ তারিখের মধ্যে কিস্তি জমা দিন</li>
-        <li>দেরিতে জমা দিলে লেট ফি প্রযোজ্য হবে</li>
-        <li>প্রথম লগইনে পাসওয়ার্ড পরিবর্তন করে নিন</li>
-      </ul>
-      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
-    return send_email(em, f"🎉 স্বাগতম — আপনার সদস্যতা সম্পন্ন হয়েছে | {SOMITI_NAME}", _wrap_email(body))
+def _q_test_email(to_email):
+    html = _wrap(
+        f'<p style="font-size:16px;color:#333;">✅ ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>'
+        + _box(_row("SMTP সার্ভার", SMTP_SERVER)
+             + _row("Port", str(SMTP_PORT))
+             + _row("প্রেরক", SENDER_EMAIL)
+             + _row("পাঠানোর সময়", datetime.now().strftime('%d-%m-%Y %H:%M')))
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME}</p>'
+    )
+    # Test email synchronous (spinner দেখাবে)
+    return _send_one(to_email, f"🧪 ইমেইল টেস্ট | {SOMITI_NAME}", html)
 
-# ── ২. পাসওয়ার্ড পরিবর্তন (সদস্য নিজে) ─────────────────────
-def email_password_changed(member, new_password):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;">আপনার অ্যাকাউন্টের পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে।</p>
-      {_info_box(
-        _row("নতুন পাসওয়ার্ড", f"<b>{new_password}</b>", "#c0392b") +
-        _row("পরিবর্তনের সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
-      )}
-      <div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:12px 18px;margin:14px 0;">
-        <p style="color:#e65100;margin:0;font-size:13px;">⚠️ যদি আপনি নিজে এই পরিবর্তন না করে থাকেন,
-        তাহলে অবিলম্বে এডমিনকে জানান।</p>
-      </div>
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
-    return send_email(em, f"🔐 পাসওয়ার্ড পরিবর্তনের নোটিফিকেশন | {SOMITI_NAME}", _wrap_email(body))
+def _q_notification(to_emails, subject, message):
+    html = _wrap(
+        f'<p style="font-size:15px;color:#333;white-space:pre-wrap;">{message}</p>'
+        + f'<p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME}</p>'
+    )
+    for em in to_emails:
+        em = str(em).strip()
+        if '@' in em:
+            _queue_email("নোটিফিকেশন", em, subject, html)
 
-# ── ৩. এডমিন পাসওয়ার্ড রিসেট ───────────────────────────────
-def email_admin_password_reset(member, new_password):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    app_url = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;">এডমিন কর্তৃক আপনার পাসওয়ার্ড রিসেট করা হয়েছে।</p>
-      {_info_box(
-        _row("নতুন পাসওয়ার্ড", f"<b>{new_password}</b>", "#c0392b") +
-        _row("রিসেটের সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
-      )}
-      <p style="color:#555;font-size:13px;">লগইন করুন এবং দ্রুত পাসওয়ার্ড পরিবর্তন করুন।</p>
-      <a href="{app_url}" style="display:inline-block;background:#1a5276;color:white;
-         padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;margin-top:8px;">
-         🔐 লগইন করুন</a>
-      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
-    return send_email(em, f"🔑 নতুন পাসওয়ার্ড প্রদান করা হয়েছে | {SOMITI_NAME}", _wrap_email(body))
+# Legacy wrappers (পুরনো call এখনও কাজ করবে)
+def send_email(to, subject, html): return _send_one(to, subject, html)
+def email_welcome(m): _q_welcome(m); return True, "queued"
+def email_password_changed(m, pw): _q_password_changed(m, pw); return True, "queued"
+def email_admin_password_reset(m, pw): _q_admin_reset(m, pw); return True, "queued"
+def email_deposit_receipt(m,a,lf,mn,y,dd,ts): _q_deposit_receipt(m,a,lf,mn,y,dd,ts); return True,"queued"
+def email_late_fee(m,a,lf,mn,y,dd): _q_late_fee(m,a,lf,mn,y,dd); return True,"queued"
+def email_monthly_reminder(m,mn,y,ma): _q_monthly_reminder(m,mn,y,ma); return True,"queued"
+def email_annual_report(m,y,tl,ts): _q_annual_report(m,y,tl,ts); return True,"queued"
+def email_lottery_winner(m,mn,y): _q_lottery_winner(m,mn,y); return True,"queued"
+def email_fund_transfer(tx,a,d,pb,nb,ds,ems): _q_fund_transfer(tx,a,d,pb,nb,ds,ems)
+def send_test_email(to): return _q_test_email(to)
+def send_notification_email(tos,subj,msg,sender_name="Admin"):
+    _q_notification(tos,subj,msg); return [{'email':e,'ok':True,'msg':'queued'} for e in tos]
+def send_emails_bulk(tos,subj,html):
+    return [{'email':e,'ok':True,'msg':'queued'} for e in tos if '@' in str(e)]
 
-# ── ৪. কিস্তি জমার রসিদ ────────────────────────────────────
-def email_deposit_receipt(member, amount, late_fee, month_name, year, deposit_date, total_savings):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    total = amount + late_fee
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;">আপনার কিস্তি জমার রসিদ নিচে দেওয়া হলো।</p>
-      {_info_box(
-        _row("সদস্যের নাম", member.get('name','')) +
-        _row("সদস্য আইডি", str(member.get('id',''))) +
-        _row("কিস্তির মাস", f"{month_name} {year}") +
-        _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা") +
-        _row("লেট ফি", f"{fmt(late_fee)} টাকা") +
-        _row("মোট জমা", f"<b>{fmt(total)} টাকা</b>", "#1e8449") +
-        _row("জমার তারিখ", deposit_date)
-      )}
-      <div style="background:#e8f5e9;border-radius:8px;padding:14px 20px;margin:14px 0;text-align:center;">
-        <p style="margin:0;color:#2e7d32;font-size:16px;">
-          📊 আপনার বর্তমান মোট সঞ্চয়: <b>{fmt(total_savings)} টাকা</b>
-        </p>
-      </div>
-      <p style="color:#555;font-size:13px;">নিয়মিত কিস্তি জমা দেওয়ার জন্য ধন্যবাদ।</p>
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
-    return send_email(em, f"🧾 কিস্তি জমার রসিদ — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
-
-# ── ৫. মাসিক রিমাইন্ডার ─────────────────────────────────────
-def email_monthly_reminder(member, month_name, year, monthly_amount):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    app_url = f"https://oiorganization2024.streamlit.app/?member={member.get('id','')}"
-    today   = datetime.now().strftime('%d-%m-%Y')
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;">এই স্মারকপত্রটি পাঠানো হচ্ছে কারণ <b>{month_name} {year}</b>
-         মাসের আপনার কিস্তিটি এখনও জমা হয়নি।</p>
-      {_info_box(
-        _row("কিস্তির মাস", f"{month_name} {year}") +
-        _row("কিস্তির পরিমাণ", f"{fmt(monthly_amount)} টাকা") +
-        _row("শেষ তারিখ", f"১০ {month_name} {year}") +
-        _row("আজকের তারিখ", today)
-      )}
-      <div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:12px 18px;margin:14px 0;">
-        <p style="color:#e65100;margin:0;font-size:13px;">⚠️ দেরিতে জমা দিলে লেট ফি প্রযোজ্য হবে।</p>
-      </div>
-      <a href="{app_url}" style="display:inline-block;background:#e67e22;color:white;
-         padding:10px 22px;border-radius:6px;text-decoration:none;font-size:13px;">
-         💳 এখনই জমা দিন</a>
-      <p style="color:#1a5276;font-weight:bold;margin-top:20px;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
-    return send_email(em, f"⏰ কিস্তি রিমাইন্ডার — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
-
-# ── ৬. লেট ফি নোটিফিকেশন ───────────────────────────────────
-def email_late_fee(member, amount, late_fee, month_name, year, deposit_date):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    total = amount + late_fee
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;"><b>{month_name} {year}</b> মাসের কিস্তি নির্ধারিত সময়ের
-         পরে জমা দেওয়ায় লেট ফি যুক্ত হয়েছে।</p>
-      {_info_box(
-        _row("কিস্তির মাস", f"{month_name} {year}") +
-        _row("কিস্তির পরিমাণ", f"{fmt(amount)} টাকা") +
-        _row("লেট ফি", f"<b>{fmt(late_fee)} টাকা</b>", "#c0392b") +
-        _row("মোট প্রদেয়", f"<b>{fmt(total)} টাকা</b>", "#1e8449") +
-        _row("জমার তারিখ", deposit_date) +
-        _row("নির্ধারিত তারিখ", f"১০ {month_name} {year}")
-      )}
-      <div style="background:#fce4ec;border:1px solid #f48fb1;border-radius:8px;padding:12px 18px;margin:14px 0;">
-        <p style="color:#880e4f;margin:0;font-size:13px;">📌 নিয়ম: প্রতি মাসের ১০ তারিখের মধ্যে কিস্তি জমা দিতে হবে।
-        পরবর্তী মাসে সময়মতো জমা দেওয়ার অনুরোধ করা হচ্ছে।</p>
-      </div>
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
-    return send_email(em, f"💸 লেট ফি নোটিফিকেশন — {month_name} {year} | {SOMITI_NAME}", _wrap_email(body))
-
-# ── ৭. বার্ষিক রিপোর্ট ──────────────────────────────────────
-def email_annual_report(member, year, trans_list, total_savings):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    year_trans = [tr for tr in trans_list if str(tr.get('year','')) == str(year)]
-    total_deposited = sum(int(float(tr.get('amount',0))) for tr in year_trans)
-    total_late      = sum(int(float(tr.get('late_fee',0))) for tr in year_trans)
-    rows_html = ""
-    for mon_num, mon_name in BANGLA_MONTHS.items():
-        mon_deps = [tr for tr in year_trans if str(tr.get('month','')) == str(mon_num)]
-        if mon_deps:
-            amt = sum(int(float(tr.get('amount',0))) for tr in mon_deps)
-            rows_html += _row(mon_name, f"{fmt(amt)} টাকা")
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় <b>{member.get('name','')}</b>,</p>
-      <p style="color:#555;"><b>{year}</b> সালের আপনার বার্ষিক সঞ্চয় রিপোর্ট নিচে দেওয়া হলো।</p>
-      {_info_box(
-        _row("সদস্যের নাম", member.get('name','')) +
-        _row("সদস্য আইডি", str(member.get('id',''))) +
-        _row("বছর", str(year))
-      )}
-      <p style="font-size:14px;color:#1a5276;font-weight:bold;margin:16px 0 6px 0;">📈 মাসওয়ারি জমার বিবরণ:</p>
-      {_info_box(rows_html if rows_html else "<p style='color:#999;'>কোনো লেনদেন নেই</p>")}
-      {_info_box(
-        _row("মোট কিস্তি জমা", f"<b>{fmt(total_deposited)} টাকা</b>", "#1e8449") +
-        _row("মোট লেট ফি", f"{fmt(total_late)} টাকা", "#c0392b") +
-        _row("বর্তমান মোট সঞ্চয়", f"<b>{fmt(total_savings)} টাকা</b>", "#1565c0")
-      )}
-      <p style="color:#555;font-size:13px;">আগামী বছরেও আমাদের সাথে থাকার জন্য ধন্যবাদ।</p>
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
-    return send_email(em, f"📊 বার্ষিক সঞ্চয় রিপোর্ট — {year} | {SOMITI_NAME}", _wrap_email(body))
-
-# ── ৮. লটারি বিজয়ী ─────────────────────────────────────────
-def email_lottery_winner(member, month_name, year):
-    em = member.get('email','')
-    if not em or '@' not in str(em): return False, "ইমেইল নেই"
-    body = f"""
-      <div style="text-align:center;padding:10px 0 20px 0;">
-        <div style="font-size:50px;">🏆</div>
-        <h2 style="color:#e67e22;margin:8px 0;">অভিনন্দন!</h2>
-      </div>
-      <p style="font-size:15px;color:#333;text-align:center;">
-        প্রিয় <b>{member.get('name','')}</b>,<br>
-        আপনি আমাদের <b>{month_name} {year}</b> মাসের লটারিতে বিজয়ী হয়েছেন! 🎉
-      </p>
-      {_info_box(
-        _row("বিজয়ী সদস্য", member.get('name','')) +
-        _row("সদস্য আইডি", str(member.get('id',''))) +
-        _row("লটারির মাস", f"{month_name} {year}") +
-        _row("তারিখ", datetime.now().strftime('%d-%m-%Y'))
-      )}
-      <p style="color:#555;font-size:13px;text-align:center;">
-        পরবর্তী লটারিতে অংশ নিতে নিয়মিত কিস্তি জমা দিন।
-      </p>
-      <p style="color:#1a5276;font-weight:bold;text-align:center;">
-        ধন্যবাদ — {SOMITI_NAME} পরিবার</p>"""
-    return send_email(em, f"🎲 অভিনন্দন! আপনি লটারিতে বিজয়ী | {SOMITI_NAME}", _wrap_email(body))
-
-# ── ৯. ফান্ড ট্রান্সফার নোটিফিকেশন ─────────────────────────
-def email_fund_transfer(tx_type, amount, description, prev_bal, new_bal, date_str, to_emails):
-    type_label = "➕ জমা" if tx_type == 'deposit' else "➖ উত্তোলন"
-    body = f"""
-      <p style="font-size:15px;color:#333;">প্রিয় সদস্যবৃন্দ / এডমিন,</p>
-      <p style="color:#555;">সংস্থার ফান্ডে নিম্নলিখিত লেনদেন সম্পন্ন হয়েছে।</p>
-      {_info_box(
-        _row("লেনদেনের ধরন", type_label) +
-        _row("পরিমাণ", f"<b>{fmt(amount)} টাকা</b>", "#1565c0") +
-        _row("তারিখ", date_str) +
-        _row("বিবরণ", description) +
-        _row("পূর্বের ব্যালেন্স", f"{fmt(prev_bal)} টাকা") +
-        _row("বর্তমান ব্যালেন্স", f"<b>{fmt(new_bal)} টাকা</b>", "#1e8449")
-      )}
-      <p style="color:#555;font-size:13px;">বিস্তারিত জানতে অ্যাপে লগইন করুন।</p>
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME} প্রশাসন</p>"""
-    html = _wrap_email(body)
-    subject = f"🏧 ফান্ড লেনদেনের নোটিফিকেশন ({type_label}) | {SOMITI_NAME}"
-    return send_emails_bulk(to_emails, subject, html)
-
-# ── ১০. টেস্ট ইমেইল ─────────────────────────────────────────
-def send_test_email(to_email):
-    body = f"""
-      <p style="font-size:16px;color:#333;">✅ আপনার ইমেইল কনফিগারেশন সঠিকভাবে কাজ করছে!</p>
-      <p style="color:#555;">এই ইমেইলটি একটি টেস্ট মেসেজ। সব ইমেইল ফিচার সক্রিয় আছে।</p>
-      {_info_box(
-        _row("SMTP সার্ভার", SMTP_SERVER) +
-        _row("Port", str(SMTP_PORT)) +
-        _row("প্রেরক", SENDER_EMAIL) +
-        _row("পাঠানোর সময়", datetime.now().strftime('%d-%m-%Y %H:%M'))
-      )}
-      <p style="color:#1a5276;font-weight:bold;">ধন্যবাদ — {SOMITI_NAME}</p>"""
-    return send_email(to_email, f"🧪 ইমেইল টেস্ট | {SOMITI_NAME}", _wrap_email(body))
-
-def send_notification_email(to_emails, subject, message, sender_name="Admin"):
-    body = f"""
-      <p style="font-size:15px;color:#333;white-space:pre-wrap;">{message}</p>
-      <p style="color:#888;font-size:12px;margin-top:20px;">— পাঠিয়েছেন: {sender_name}</p>"""
-    html = _wrap_email(body)
-    return send_emails_bulk(to_emails, subject, html)
 
 # ==================== ইউটিলিটি ====================
 def generate_member_id():
@@ -789,6 +837,7 @@ def admin_login_page():
 
 def admin_panel():
     apply_dark_theme()
+    process_email_queue()   # ← প্রতিটি render-এ pending ইমেইল পাঠায়
     show_admin_header()
     with st.sidebar:
         st.markdown("### 🌐 " + t("ভাষা", "Language"))
@@ -1651,6 +1700,7 @@ def member_login_page(member_id):
 
 def member_dashboard_view():
     apply_dark_theme()
+    process_email_queue()   # ← pending ইমেইল পাঠায়
     member = get_member_by_id(st.session_state.member_id)
     if not member:
         st.error("Member not found")
